@@ -1,0 +1,443 @@
+package org.example;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.util.Iterator;
+import java.util.List;
+
+public class ApiHandler implements HttpHandler {
+
+    private static final String DEFAULT_USER = "guest";
+    private static final long MAX_PHOTO_BYTES = 20L * 1024 * 1024;
+    private static final long TARGET_PHOTO_BYTES = 1_500_000;
+    private static final int  PHOTO_MAX_SIDE = 1600;
+    private static final int  THUMB_MAX_SIDE = 160;
+
+    private static final Path PHOTOS_DIR = Paths.get("photos").toAbsolutePath();
+
+    static {
+        ImageIO.setUseCache(false);
+    }
+
+    @Override
+    public void handle(HttpExchange ex) throws IOException {
+        String method = ex.getRequestMethod();
+        String path = ex.getRequestURI().getPath();
+
+        try {
+            if (path.equals("/api/export.csv")) { exportDevicesCsv(ex); return; }
+            if (path.equals("/api/audit.csv"))  { exportAuditCsv(ex);   return; }
+
+            if (path.startsWith("/api/devices/") && path.endsWith("/restore") && "POST".equals(method)) {
+                String mid = path.substring("/api/devices/".length(), path.length() - "/restore".length());
+                if (mid.isEmpty() || mid.contains("/")) {
+                    sendJson(ex, 404, new JSONObject().put("error", "not found"));
+                    return;
+                }
+                restoreDevice(ex, Long.parseLong(mid));
+                return;
+            }
+
+            if (path.startsWith("/api/devices/") && path.endsWith("/photo") && "POST".equals(method)) {
+                String mid = path.substring("/api/devices/".length(), path.length() - "/photo".length());
+                if (mid.isEmpty() || mid.contains("/")) {
+                    sendJson(ex, 404, new JSONObject().put("error", "not found"));
+                    return;
+                }
+                uploadPhoto(ex, Long.parseLong(mid));
+                return;
+            }
+
+            if (path.equals("/api/devices/deleted") && "GET".equals(method)) {
+                listDeletedDevices(ex);
+                return;
+            }
+
+            if (path.equals("/api/devices")) {
+                if ("GET".equals(method)) listDevices(ex);
+                else if ("POST".equals(method)) createDevice(ex);
+                else methodNotAllowed(ex);
+                return;
+            }
+
+            if (path.startsWith("/api/devices/")) {
+                String tail = path.substring("/api/devices/".length());
+                if (tail.isEmpty() || tail.contains("/")) {
+                    sendJson(ex, 404, new JSONObject().put("error", "not found"));
+                    return;
+                }
+                long id = Long.parseLong(tail);
+                switch (method) {
+                    case "GET"    -> getDevice(ex, id);
+                    case "PUT"    -> updateDevice(ex, id);
+                    case "DELETE" -> deleteDevice(ex, id);
+                    default       -> methodNotAllowed(ex);
+                }
+                return;
+            }
+
+            if (path.equals("/api/audit")) { audit(ex); return; }
+            if (path.equals("/api/stats")) { stats(ex); return; }
+
+            sendJson(ex, 404, new JSONObject().put("error", "unknown endpoint"));
+        } catch (NumberFormatException e) {
+            sendJson(ex, 400, new JSONObject().put("error", "invalid id"));
+        } catch (SQLException e) {
+            e.printStackTrace();
+            sendJson(ex, 500, new JSONObject().put("error", "db error: " + e.getMessage()));
+        } catch (Exception e) {
+            e.printStackTrace();
+            sendJson(ex, 500, new JSONObject().put("error", e.getMessage()));
+        } finally {
+            ex.close();
+        }
+    }
+
+    private void listDeletedDevices(HttpExchange ex) throws IOException, SQLException {
+        List<Device> devices = Db.getDeletedDevices();
+        JSONArray arr = new JSONArray();
+        for (Device d : devices) arr.put(toJson(d));
+        sendJson(ex, 200, arr);
+    }
+
+    private void restoreDevice(HttpExchange ex, long id) throws IOException, SQLException {
+        boolean ok = Db.restoreDevice(id, DEFAULT_USER);
+        if (!ok) {
+            sendJson(ex, 404, new JSONObject().put("error", "not found"));
+        } else {
+            sendJson(ex, 200, new JSONObject().put("status", "restored"));
+        }
+    }
+
+    private void uploadPhoto(HttpExchange ex, long id) throws IOException, SQLException {
+        Device d = Db.getDevice(id);
+        if (d == null) {
+            sendJson(ex, 404, new JSONObject().put("error", "device not found"));
+            return;
+        }
+
+        byte[] raw;
+        try (InputStream in = ex.getRequestBody()) {
+            raw = readLimited(in, MAX_PHOTO_BYTES);
+        }
+        if (raw == null) { sendJson(ex, 413, new JSONObject().put("error", "file too large")); return; }
+        if (raw.length == 0) { sendJson(ex, 400, new JSONObject().put("error", "empty body")); return; }
+
+        BufferedImage src;
+        try { src = ImageIO.read(new ByteArrayInputStream(raw)); } catch (IOException e) { src = null; }
+        if (src == null) { sendJson(ex, 415, new JSONObject().put("error", "unsupported image format")); return; }
+
+        Files.createDirectories(PHOTOS_DIR);
+
+        String base = "photo_" + id + "_" + System.currentTimeMillis();
+        byte[] fullBytes = compressJpeg(src, PHOTO_MAX_SIDE, TARGET_PHOTO_BYTES);
+        String fullName = base + ".jpg";
+        Path fullPath = PHOTOS_DIR.resolve(fullName);
+        Files.write(fullPath, fullBytes);
+
+        byte[] thumbBytes = compressJpeg(src, THUMB_MAX_SIDE, Long.MAX_VALUE);
+        String thumbName = base + "_thumb.jpg";
+        Path thumbPath = PHOTOS_DIR.resolve(thumbName);
+        Files.write(thumbPath, thumbBytes);
+
+        deletePhotoFilesIfAny(d);
+
+        String photoPath = "photos/" + fullName;
+        String thumbRel  = "photos/" + thumbName;
+        Db.updatePhotoPaths(id, photoPath, thumbRel, DEFAULT_USER);
+
+        JSONObject resp = toJson(Db.getDevice(id));
+        resp.put("changes", "фото " + fullBytes.length / 1024 + " КБ, миниатюра " + thumbBytes.length / 1024 + " КБ");
+        sendJson(ex, 200, resp);
+    }
+
+    private static byte[] readLimited(InputStream in, long limit) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        long total = 0;
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            total += n;
+            if (total > limit) return null;
+            out.write(buf, 0, n);
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] compressJpeg(BufferedImage src, int maxSide, long target) throws IOException {
+        int w = src.getWidth(), h = src.getHeight();
+        if (w > maxSide || h > maxSide) {
+            if (w >= h) { h = Math.round(h * (float) maxSide / w); w = maxSide; }
+            else        { w = Math.round(w * (float) maxSide / h); h = maxSide; }
+        }
+        BufferedImage rgb = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = rgb.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.setColor(java.awt.Color.WHITE);
+            g.fillRect(0, 0, w, h);
+            g.drawImage(src, 0, 0, w, h, null);
+        } finally {
+            g.dispose();
+        }
+
+        float[] qualities = {0.85f, 0.75f, 0.65f, 0.55f, 0.45f, 0.35f};
+        byte[] best = null;
+        for (float q : qualities) {
+            byte[] bytes = writeJpeg(rgb, q);
+            best = bytes;
+            if (bytes.length <= target) break;
+        }
+        return best;
+    }
+
+    private static byte[] writeJpeg(BufferedImage img, float quality) throws IOException {
+        Iterator<ImageWriter> it = ImageIO.getImageWritersByFormatName("jpeg");
+        if (!it.hasNext()) throw new IOException("no JPEG writer");
+        ImageWriter writer = it.next();
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ImageOutputStream ios = ImageIO.createImageOutputStream(bos)) {
+            writer.setOutput(ios);
+            ImageWriteParam p = writer.getDefaultWriteParam();
+            p.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            p.setCompressionQuality(quality);
+            writer.write(null, new IIOImage(img, null, null), p);
+        } finally {
+            writer.dispose();
+        }
+        return bos.toByteArray();
+    }
+
+    private static void deletePhotoFilesIfAny(Device d) {
+        deleteIfInsidePhotos(d.photoPath);
+        deleteIfInsidePhotos(d.photoThumbPath);
+    }
+
+    private static void deleteIfInsidePhotos(String rel) {
+        if (rel == null || !rel.startsWith("photos/")) return;
+        String name = rel.substring("photos/".length());
+        if (name.isEmpty() || name.contains("/") || name.contains("\\") || name.contains("..")) return;
+        try { Files.deleteIfExists(PHOTOS_DIR.resolve(name)); } catch (IOException ignored) { }
+    }
+
+    private void listDevices(HttpExchange ex) throws IOException, SQLException {
+        List<Device> devices = Db.getAllDevices();
+        JSONArray arr = new JSONArray();
+        for (Device d : devices) arr.put(toJson(d));
+        sendJson(ex, 200, arr);
+    }
+
+    private void getDevice(HttpExchange ex, long id) throws IOException, SQLException {
+        Device d = Db.getDevice(id);
+        if (d == null) sendJson(ex, 404, new JSONObject().put("error", "not found"));
+        else sendJson(ex, 200, toJson(d));
+    }
+
+    private void createDevice(HttpExchange ex) throws IOException, SQLException {
+        JSONObject body = readJson(ex);
+        Device d = fromJson(body, 0);
+        long id = Db.createDevice(d, DEFAULT_USER);
+        d.id = id;
+        sendJson(ex, 201, toJson(Db.getDevice(id)));
+    }
+
+    private void updateDevice(HttpExchange ex, long id) throws IOException, SQLException {
+        JSONObject body = readJson(ex);
+
+        Device oldDevice = Db.getDevice(id);
+        if (oldDevice == null) {
+            sendJson(ex, 404, new JSONObject().put("error", "not found"));
+            return;
+        }
+
+        Device d = fromJson(body, id);
+        boolean forceClearPhoto = body.has("photoPath") && body.isNull("photoPath");
+
+        try {
+            boolean ok = Db.updateDevice(d, DEFAULT_USER, forceClearPhoto);
+            if (!ok) {
+                sendJson(ex, 404, new JSONObject().put("error", "not found"));
+            } else {
+                if (forceClearPhoto) {
+                    deletePhotoFilesIfAny(oldDevice);
+                }
+                sendJson(ex, 200, toJson(Db.getDevice(id)));
+            }
+        } catch (OptimisticLockException e) {
+            sendJson(ex, 409, new JSONObject()
+                    .put("error", "conflict")
+                    .put("message", "Прибор уже был изменён другим пользователем. Обновите данные и попробуйте снова.")
+                    .put("expectedVersion", e.expectedVersion)
+                    .put("actualVersion", e.actualVersion));
+        }
+    }
+
+    private void deleteDevice(HttpExchange ex, long id) throws IOException, SQLException {
+        boolean ok = Db.deleteDevice(id, DEFAULT_USER);
+        if (!ok) {
+            sendJson(ex, 404, new JSONObject().put("error", "not found"));
+        } else {
+            ex.sendResponseHeaders(204, -1);
+        }
+    }
+
+    private void audit(HttpExchange ex) throws IOException, SQLException {
+        int limit = 100;
+        String q = ex.getRequestURI().getQuery();
+        if (q != null) {
+            for (String part : q.split("&")) {
+                if (part.startsWith("limit=")) {
+                    try { limit = Integer.parseInt(part.substring(6)); } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+        List<String[]> rows = Db.getAudit(limit);
+        JSONArray arr = new JSONArray();
+        for (String[] r : rows) {
+            arr.put(new JSONObject()
+                    .put("when", r[0] == null ? "" : r[0])
+                    .put("who", r[1] == null ? "" : r[1])
+                    .put("action", r[2] == null ? "" : r[2])
+                    .put("details", r[3] == null ? "" : r[3])
+                    .put("name", r[4] == null ? "—" : r[4])
+                    .put("serialNumber", r[5] == null ? "—" : r[5]));
+        }
+        sendJson(ex, 200, arr);
+    }
+
+    private void stats(HttpExchange ex) throws IOException, SQLException {
+        List<Device> all = Db.getAllDevices();
+        LocalDate today = LocalDate.now();
+        LocalDate in30 = today.plusDays(30);
+        int overdue = 0, soon = 0, ok = 0;
+        for (Device d : all) {
+            if (d.nextVerification == null || d.nextVerification.isEmpty()) continue;
+            LocalDate nv = LocalDate.parse(d.nextVerification);
+            if (nv.isBefore(today)) overdue++;
+            else if (!nv.isAfter(in30)) soon++;
+            else ok++;
+        }
+        sendJson(ex, 200, new JSONObject()
+                .put("total", all.size())
+                .put("overdue", overdue)
+                .put("soon", soon)
+                .put("ok", ok));
+    }
+
+    private void exportDevicesCsv(HttpExchange ex) throws IOException, SQLException {
+        List<Device> all = Db.getAllDevices();
+        StringBuilder sb = new StringBuilder();
+        sb.append("ID;Заводской номер;Наименование;Расположение;Последняя поверка;Следующая поверка\r\n");
+        for (Device d : all) {
+            sb.append(d.id).append(';')
+                    .append(csv(d.serialNumber)).append(';')
+                    .append(csv(d.name)).append(';')
+                    .append(csv(d.location)).append(';')
+                    .append(csv(d.lastVerification)).append(';')
+                    .append(csv(d.nextVerification)).append("\r\n");
+        }
+        sendCsv(ex, "devices.csv", sb.toString());
+    }
+
+    private void exportAuditCsv(HttpExchange ex) throws IOException, SQLException {
+        List<String[]> rows = Db.getAudit(Integer.MAX_VALUE);
+        StringBuilder sb = new StringBuilder();
+        sb.append("Когда;Кто;Действие;Наименование;Зав. номер;Детали\r\n");
+        for (String[] r : rows) {
+            sb.append(csv(r[0])).append(';')
+                    .append(csv(r[1])).append(';')
+                    .append(csv(r[2])).append(';')
+                    .append(csv(r[4])).append(';')
+                    .append(csv(r[5])).append(';')
+                    .append(csv(r[3])).append("\r\n");
+        }
+        sendCsv(ex, "audit.csv", sb.toString());
+    }
+
+    private void sendCsv(HttpExchange ex, String filename, String body) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write("\uFEFF".getBytes(StandardCharsets.UTF_8));
+        buf.write(body.getBytes(StandardCharsets.UTF_8));
+        byte[] bytes = buf.toByteArray();
+
+        ex.getResponseHeaders().set("Content-Type", "text/csv; charset=UTF-8");
+        ex.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+        ex.getResponseHeaders().set("Cache-Control", "no-store");
+        ex.sendResponseHeaders(200, bytes.length);
+        try (OutputStream out = ex.getResponseBody()) { out.write(bytes); }
+    }
+
+    private static JSONObject toJson(Device d) {
+        return new JSONObject()
+                .put("id", d.id)
+                .put("serialNumber", d.serialNumber == null ? "" : d.serialNumber)
+                .put("name", d.name == null ? "" : d.name)
+                .put("location", d.location == null ? "" : d.location)
+                .put("lastVerification", d.lastVerification == null ? "" : d.lastVerification)
+                .put("nextVerification", d.nextVerification == null ? "" : d.nextVerification)
+                .put("photoPath", (d.photoPath == null || d.photoPath.trim().isEmpty()) ? JSONObject.NULL : d.photoPath)
+                .put("photoThumbPath", (d.photoThumbPath == null || d.photoThumbPath.trim().isEmpty()) ? JSONObject.NULL : d.photoThumbPath)
+                .put("version", d.version)
+                .put("createdAt", d.createdAt == null ? "" : d.createdAt);
+    }
+
+    private static Device fromJson(JSONObject o, long id) {
+        Device d = new Device();
+        d.id = id;
+        d.serialNumber = emptyToNull(o.optString("serialNumber", null));
+        d.name = o.optString("name", null);
+        d.location = o.optString("location", null);
+        d.lastVerification = emptyToNull(o.optString("lastVerification", null));
+        d.nextVerification = emptyToNull(o.optString("nextVerification", null));
+        d.photoPath = emptyToNull(o.optString("photoPath", null));
+        d.photoThumbPath = emptyToNull(o.optString("photoThumbPath", null));
+        d.version = o.optInt("version", 0);
+        return d;
+    }
+
+    private static String emptyToNull(String s) { return s == null || s.trim().isEmpty() ? null : s; }
+
+    private static JSONObject readJson(HttpExchange ex) throws IOException {
+        try (InputStream in = ex.getRequestBody()) {
+            String body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            return body.isEmpty() ? new JSONObject() : new JSONObject(body);
+        }
+    }
+
+    private static void sendJson(HttpExchange ex, int code, Object body) throws IOException {
+        byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
+        ex.sendResponseHeaders(code, bytes.length);
+        try (OutputStream out = ex.getResponseBody()) { out.write(bytes); }
+    }
+
+    private static void methodNotAllowed(HttpExchange ex) throws IOException {
+        sendJson(ex, 405, new JSONObject().put("error", "method not allowed"));
+    }
+
+    private static String csv(String s) {
+        if (s == null) return "";
+        if (s.contains(";") || s.contains("\"") || s.contains("\n") || s.contains("\r"))
+            return "\"" + s.replace("\"", "\"\"") + "\"";
+        return s;
+    }
+}
