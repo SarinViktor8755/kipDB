@@ -22,10 +22,48 @@ import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.Iterator;
 import java.util.List;
+import java.util.UUID;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ApiHandler implements HttpHandler {
 
-    private static final String DEFAULT_USER = "guest";
+    private static final Map<String, AuthSession> SESSIONS = new ConcurrentHashMap<>();
+    private static final ThreadLocal<AuthSession> CURRENT_SESSION = new ThreadLocal<>();
+    private static final long SESSION_TTL_MS = 12L * 60 * 60 * 1000;
+
+    private static final class AuthSession {
+        final long userId; final String login; final String name; final String role; final long expiresAt;
+        AuthSession(long userId, String login, String name, String role) {
+            this.userId=userId; this.login=login; this.name=name; this.role=role;
+            this.expiresAt=System.currentTimeMillis()+SESSION_TTL_MS;
+        }
+        JSONObject json() { return new JSONObject().put("id", userId).put("login", login).put("name", name).put("role", role); }
+    }
+
+    private static String currentUserName() {
+        AuthSession s = CURRENT_SESSION.get(); return s == null ? "unknown" : s.name;
+    }
+    private static AuthSession findSession(HttpExchange ex) {
+        String cookie = ex.getRequestHeaders().getFirst("Cookie");
+        if (cookie == null) return null;
+        for (String item : cookie.split(";")) {
+            String[] kv = item.trim().split("=", 2);
+            if (kv.length == 2 && kv[0].equals("KIPSESSION")) {
+                AuthSession s = SESSIONS.get(kv[1]);
+                if (s != null && s.expiresAt > System.currentTimeMillis()) return s;
+                if (s != null) SESSIONS.remove(kv[1]);
+            }
+        }
+        return null;
+    }
+    private static void setSessionCookie(HttpExchange ex, String token) {
+        ex.getResponseHeaders().add("Set-Cookie", "KIPSESSION=" + token + "; Path=/; HttpOnly; SameSite=Lax");
+    }
+    private static void clearSessionCookie(HttpExchange ex) {
+        ex.getResponseHeaders().add("Set-Cookie", "KIPSESSION=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    }
+
     private static final long MAX_PHOTO_BYTES = 20L * 1024 * 1024;
     private static final long TARGET_PHOTO_BYTES = 1_500_000;
     private static final int  PHOTO_MAX_SIDE = 1600;
@@ -43,6 +81,85 @@ public class ApiHandler implements HttpHandler {
         String path = ex.getRequestURI().getPath();
 
         try {
+            // Публичные методы авторизации: список пользователей, вход, выход и проверка сессии.
+            if (path.equals("/api/auth/users") && "GET".equals(method)) {
+                sendJson(ex, 200, Db.getUsersPublic()); return;
+            }
+            if (path.equals("/api/auth/me") && "GET".equals(method)) {
+                AuthSession existing = findSession(ex);
+                sendJson(ex, 200, existing == null ? new JSONObject().put("authenticated", false)
+                        : new JSONObject().put("authenticated", true).put("user", existing.json()));
+                return;
+            }
+            if (path.equals("/api/auth/login") && "POST".equals(method)) {
+                JSONObject body = readJson(ex);
+                String login = body.optString("login", "").trim();
+                String password = body.optString("password", "");
+                AuthSession session;
+                if ("guest".equalsIgnoreCase(login) || "Гость".equalsIgnoreCase(login)) {
+                    session = new AuthSession(0, "guest", "Гость", "guest");
+                } else {
+                    JSONObject account = Db.findUserForLogin(login);
+                    if (account == null || !AuthUtil.verify(password, account.optString("passwordHash", ""))) {
+                        sendJson(ex, 401, new JSONObject().put("error", "Неверный пользователь или пароль")); return;
+                    }
+                    session = new AuthSession(account.getLong("id"), account.getString("login"), account.getString("name"), account.getString("role"));
+                }
+                long now = System.currentTimeMillis();
+                SESSIONS.entrySet().removeIf(entry -> entry.getValue().expiresAt <= now);
+                String token = UUID.randomUUID().toString().replace("-", "");
+                SESSIONS.put(token, session); setSessionCookie(ex, token);
+                sendJson(ex, 200, new JSONObject().put("authenticated", true).put("user", session.json())); return;
+            }
+            if (path.equals("/api/auth/logout") && "POST".equals(method)) {
+                String cookie = ex.getRequestHeaders().getFirst("Cookie");
+                if (cookie != null) for (String item : cookie.split(";")) {
+                    String[] kv = item.trim().split("=", 2);
+                    if (kv.length == 2 && kv[0].equals("KIPSESSION")) SESSIONS.remove(kv[1]);
+                }
+                clearSessionCookie(ex); sendJson(ex, 200, new JSONObject().put("status", "ok")); return;
+            }
+
+            AuthSession session = findSession(ex);
+            if (session == null) { sendJson(ex, 401, new JSONObject().put("error", "Требуется вход в систему")); return; }
+            CURRENT_SESSION.set(session);
+            if ("guest".equals(session.role) && !"GET".equals(method) && !"HEAD".equals(method)) {
+                sendJson(ex, 403, new JSONObject().put("error", "Гость может только просматривать данные")); return;
+            }
+            if (path.equals("/api/users") || path.startsWith("/api/users/")) {
+                if (!"admin".equals(session.role)) { sendJson(ex, 403, new JSONObject().put("error", "Только администратор может управлять пользователями")); return; }
+                if (path.equals("/api/users") && "GET".equals(method)) { sendJson(ex, 200, Db.getUsersPublic()); return; }
+                if (path.equals("/api/users") && "POST".equals(method)) {
+                    JSONObject b = readJson(ex);
+                    String name = b.optString("name", "").trim();
+                    String password = b.optString("password", "");
+                    if (name.isEmpty() || name.length() > 100) { sendJson(ex, 400, new JSONObject().put("error", "Укажите имя пользователя (до 100 символов)")); return; }
+                    if (password.length() < 4) { sendJson(ex, 400, new JSONObject().put("error", "Пароль должен содержать не менее 4 символов")); return; }
+                    if (name.equalsIgnoreCase("guest") || name.equalsIgnoreCase("гость")) { sendJson(ex, 400, new JSONObject().put("error", "Это имя зарезервировано системой")); return; }
+                    try {
+                        long id = Db.createUser(name, password, currentUserName());
+                        sendJson(ex, 201, new JSONObject().put("id", id).put("name", name).put("role", "operator"));
+                    } catch (SQLException e) {
+                        if (e.getMessage() != null && e.getMessage().toLowerCase().contains("unique"))
+                            sendJson(ex, 409, new JSONObject().put("error", "Пользователь с таким именем уже существует"));
+                        else throw e;
+                    }
+                    return;
+                }
+                if ("DELETE".equals(method)) {
+                    String idText = path.substring("/api/users".length());
+                    if (!idText.startsWith("/") || idText.length() <= 1 || idText.substring(1).contains("/")) {
+                        sendJson(ex, 404, new JSONObject().put("error", "Не указан пользователь")); return;
+                    }
+                    long userId = Long.parseLong(idText.substring(1));
+                    if (userId == session.userId) { sendJson(ex, 400, new JSONObject().put("error", "Нельзя удалить текущую учётную запись администратора")); return; }
+                    if (!Db.deleteUser(userId, currentUserName())) { sendJson(ex, 404, new JSONObject().put("error", "Пользователь не найден или защищён от удаления")); return; }
+                    SESSIONS.entrySet().removeIf(entry -> entry.getValue().userId == userId);
+                    sendJson(ex, 200, new JSONObject().put("status", "deleted")); return;
+                }
+                methodNotAllowed(ex); return;
+            }
+
             if (path.equals("/api/export.csv")) { exportDevicesCsv(ex); return; }
             if (path.equals("/api/audit.csv"))  { exportAuditCsv(ex);   return; }
 
@@ -68,6 +185,58 @@ public class ApiHandler implements HttpHandler {
 
             if (path.equals("/api/devices/deleted") && "GET".equals(method)) {
                 listDeletedDevices(ex);
+                return;
+            }
+
+            // Документы: отдельная сущность с множественной привязкой приборов.
+            if (path.equals("/api/documents")) {
+                if ("GET".equals(method)) {
+                    sendJson(ex, 200, Db.getDocuments());
+                } else if ("POST".equals(method)) {
+                    JSONObject b = readJson(ex);
+                    String title = b.optString("title", "").trim();
+                    if (title.isEmpty()) { sendJson(ex, 400, new JSONObject().put("error", "Название документа обязательно")); return; }
+                    long id = Db.createDocument(title, emptyToNull(b.optString("documentNumber", "")),
+                            emptyToNull(b.optString("description", "")), b.optJSONObject("customFields"), currentUserName());
+                    sendJson(ex, 201, Db.getDocument(id));
+                } else methodNotAllowed(ex);
+                return;
+            }
+            if (path.startsWith("/api/documents/")) {
+                String tail = path.substring("/api/documents/".length());
+                String[] parts = tail.split("/");
+                long documentId = Long.parseLong(parts[0]);
+                if (parts.length == 1) {
+                    if ("GET".equals(method)) {
+                        JSONObject doc = Db.getDocument(documentId);
+                        if (doc == null) sendJson(ex, 404, new JSONObject().put("error", "document not found"));
+                        else sendJson(ex, 200, doc);
+                    } else if ("PUT".equals(method)) {
+                        JSONObject b = readJson(ex);
+                        String title = b.optString("title", "").trim();
+                        if (title.isEmpty()) { sendJson(ex, 400, new JSONObject().put("error", "Название документа обязательно")); return; }
+                        boolean ok = Db.updateDocument(documentId, title, emptyToNull(b.optString("documentNumber", "")),
+                                emptyToNull(b.optString("description", "")), b.optJSONObject("customFields"), currentUserName());
+                        if (!ok) sendJson(ex, 404, new JSONObject().put("error", "document not found"));
+                        else sendJson(ex, 200, Db.getDocument(documentId));
+                    } else if ("DELETE".equals(method)) {
+                        if (Db.deleteDocument(documentId, currentUserName())) ex.sendResponseHeaders(204, -1);
+                        else sendJson(ex, 404, new JSONObject().put("error", "document not found"));
+                    } else methodNotAllowed(ex);
+                    return;
+                }
+                if (parts.length == 3 && "devices".equals(parts[1])) {
+                    long deviceId = Long.parseLong(parts[2]);
+                    if ("POST".equals(method)) {
+                        Db.attachDevice(documentId, deviceId, currentUserName());
+                        sendJson(ex, 200, Db.getDocument(documentId));
+                    } else if ("DELETE".equals(method)) {
+                        Db.detachDevice(documentId, deviceId, currentUserName());
+                        sendJson(ex, 200, Db.getDocument(documentId));
+                    } else methodNotAllowed(ex);
+                    return;
+                }
+                sendJson(ex, 404, new JSONObject().put("error", "not found"));
                 return;
             }
 
@@ -107,6 +276,7 @@ public class ApiHandler implements HttpHandler {
             e.printStackTrace();
             sendJson(ex, 500, new JSONObject().put("error", e.getMessage()));
         } finally {
+            CURRENT_SESSION.remove();
             ex.close();
         }
     }
@@ -119,7 +289,7 @@ public class ApiHandler implements HttpHandler {
     }
 
     private void restoreDevice(HttpExchange ex, long id) throws IOException, SQLException {
-        boolean ok = Db.restoreDevice(id, DEFAULT_USER);
+        boolean ok = Db.restoreDevice(id, currentUserName());
         if (!ok) {
             sendJson(ex, 404, new JSONObject().put("error", "not found"));
         } else {
@@ -162,7 +332,7 @@ public class ApiHandler implements HttpHandler {
 
         String photoPath = "photos/" + fullName;
         String thumbRel  = "photos/" + thumbName;
-        Db.updatePhotoPaths(id, photoPath, thumbRel, DEFAULT_USER);
+        Db.updatePhotoPaths(id, photoPath, thumbRel, currentUserName());
 
         JSONObject resp = toJson(Db.getDevice(id));
         resp.put("changes", "фото " + fullBytes.length / 1024 + " КБ, миниатюра " + thumbBytes.length / 1024 + " КБ");
@@ -255,7 +425,7 @@ public class ApiHandler implements HttpHandler {
     private void createDevice(HttpExchange ex) throws IOException, SQLException {
         JSONObject body = readJson(ex);
         Device d = fromJson(body, 0);
-        long id = Db.createDevice(d, DEFAULT_USER);
+        long id = Db.createDevice(d, currentUserName());
         d.id = id;
         sendJson(ex, 201, toJson(Db.getDevice(id)));
     }
@@ -273,7 +443,7 @@ public class ApiHandler implements HttpHandler {
         boolean forceClearPhoto = body.has("photoPath") && body.isNull("photoPath");
 
         try {
-            boolean ok = Db.updateDevice(d, DEFAULT_USER, forceClearPhoto);
+            boolean ok = Db.updateDevice(d, currentUserName(), forceClearPhoto);
             if (!ok) {
                 sendJson(ex, 404, new JSONObject().put("error", "not found"));
             } else {
@@ -292,7 +462,7 @@ public class ApiHandler implements HttpHandler {
     }
 
     private void deleteDevice(HttpExchange ex, long id) throws IOException, SQLException {
-        boolean ok = Db.deleteDevice(id, DEFAULT_USER);
+        boolean ok = Db.deleteDevice(id, currentUserName());
         if (!ok) {
             sendJson(ex, 404, new JSONObject().put("error", "not found"));
         } else {

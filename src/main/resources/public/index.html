@@ -10,8 +10,10 @@
 <body>
 <header class="topbar">
     <div class="brand">Приборы КИП</div>
-    <div class="user">
-        <span id="currentUser">—</span>
+    <div class="user user-session">
+        <label for="userSelect" class="user-select-label">Пользователь</label>
+        <select id="userSelect" aria-label="Выбор пользователя"><option value="">Загрузка...</option></select>
+        <span id="currentUser" class="current-user">Не выполнен вход</span>
         <button id="logoutBtn" class="btn-link" hidden>Выйти</button>
     </div>
 </header>
@@ -19,8 +21,10 @@
 <nav class="tabs">
     <!-- Добавил href для визуальной ссылки, но JS будет перехватывать клики -->
     <a href="#all" class="tab active" data-tab="all">Все приборы</a>
+    <a href="#documents" class="tab" data-tab="documents">Документы</a>
     <a href="#audit" class="tab" data-tab="audit">Журнал</a>
     <a href="#trash" class="tab" data-tab="trash">Корзина</a>
+    <a href="#users" class="tab admin-only" data-tab="users" hidden>Пользователи</a>
 </nav>
 
 <main>
@@ -61,6 +65,73 @@
         </table>
         <div id="emptyAll" class="empty" hidden>Нет приборов</div>
     </section>
+
+    <section id="tab-documents" class="tab-panel">
+        <div id="documentsListView">
+            <div class="toolbar">
+                <input id="searchDocuments" type="search" placeholder="Поиск по названию или номеру документа…">
+                <button id="addDocumentBtn" class="btn-primary">+ Создать документ</button>
+            </div>
+            <table id="tableDocuments" class="devices">
+                <thead><tr><th>Документ</th><th>Номер</th><th>Дата создания</th><th>Приборов</th><th>Описание</th></tr></thead>
+                <tbody></tbody>
+            </table>
+            <div id="emptyDocuments" class="empty" hidden>Документов пока нет. Создайте первый документ.</div>
+        </div>
+
+        <section id="documentWorkspace" class="document-workspace" hidden>
+            <div class="document-workspace-header">
+                <div>
+                    <button id="backToDocumentsBtn" class="btn">← Все документы</button>
+                    <h1 id="documentWorkspaceTitle">Документ</h1>
+                    <div id="documentWorkspaceMeta" class="muted"></div>
+                </div>
+                <div class="document-workspace-actions">
+                    <button id="editDocumentBtn" class="btn">Изменить реквизиты</button>
+                    <button id="deleteDocumentBtn" class="btn-danger">Удалить документ</button>
+                </div>
+            </div>
+            <div class="document-info-grid">
+                <div><span class="detail-label">Номер документа</span><strong id="documentNumberView">—</strong></div>
+                <div><span class="detail-label">Дата создания</span><strong id="documentCreatedView">—</strong></div>
+                <div class="document-description"><span class="detail-label">Описание</span><span id="documentDescriptionView">—</span></div>
+            </div>
+            <div class="document-devices-header">
+                <div><h2>Приборы в документе</h2><span id="documentDeviceCount" class="muted">0 приборов</span></div>
+                <button id="addDeviceToDocumentBtn" class="btn-primary">+ Добавить прибор</button>
+            </div>
+            <table id="tableDocumentDevices" class="devices">
+                <thead><tr><th>Фото</th><th>Наименование</th><th>Зав. номер</th><th>Позиция</th><th>Следующая поверка</th><th>Действие</th></tr></thead>
+                <tbody></tbody>
+            </table>
+            <div id="emptyDocumentDevices" class="empty" hidden>В документ ещё не добавлены приборы.</div>
+        </section>
+    </section>
+
+    <div id="documentModal" class="modal" hidden>
+        <div class="modal-content">
+            <div class="modal-header"><h2 id="documentModalTitle">Новый документ</h2><button id="documentModalClose" class="btn-link" type="button">✕</button></div>
+            <form id="documentForm">
+                <input id="documentId" type="hidden">
+                <label>Название документа<input id="documentTitle" type="text" required maxlength="250" placeholder="Например, Ведомость приборов"></label>
+                <label>Номер документа<input id="documentNumber" type="text" maxlength="100" placeholder="Номер или обозначение"></label>
+                <label>Описание<textarea id="documentDescription" rows="4" placeholder="Дополнительная информация"></textarea></label>
+                <div class="modal-actions"><button id="cancelDocumentBtn" type="button" class="btn">Отмена</button><button type="submit" class="btn-primary">Сохранить</button></div>
+            </form>
+        </div>
+    </div>
+
+    <div id="addDeviceDocumentModal" class="modal" hidden>
+        <div class="modal-content">
+            <div class="modal-header"><h2>Добавить прибор в документ</h2><button id="closeAddDeviceDocument" class="btn-link" type="button">✕</button></div>
+            <label>Поиск прибора
+                <input id="documentDeviceSearch" class="full-input" type="search" autocomplete="off" placeholder="Введите название, заводской номер или позицию…">
+            </label>
+            <div id="documentDeviceSearchResults" class="device-search-results" role="listbox" aria-label="Результаты поиска приборов"></div>
+            <div id="documentDeviceSelection" class="muted">Прибор не выбран</div>
+            <div class="modal-actions"><button id="cancelAddDeviceDocument" type="button" class="btn">Отмена</button><button id="confirmAddDeviceDocument" type="button" class="btn-primary" disabled>Добавить</button></div>
+        </div>
+    </div>
 
     <section id="tab-audit" class="tab-panel">
         <div class="toolbar">
@@ -103,7 +174,34 @@
         </table>
         <div id="emptyTrash" class="empty" hidden>Корзина пуста</div>
     </section>
+
+    <section id="tab-users" class="tab-panel">
+        <div class="users-page">
+            <h1>Управление пользователями</h1>
+            <p class="muted">Создавать пользователей и назначать им права может только администратор. Новые учётные записи получают права обычного пользователя.</p>
+            <form id="createUserForm" class="user-create-form">
+                <label>Имя пользователя<input id="newUserName" type="text" required maxlength="100" placeholder="Например, Иван Петров"></label>
+                <label>Пароль<input id="newUserPassword" type="password" required minlength="4" autocomplete="new-password" placeholder="Не менее 4 символов"></label>
+                <button type="submit" class="btn-primary">Создать пользователя</button>
+            </form>
+            <h2>Список пользователей</h2>
+            <table id="tableUsers" class="devices"><thead><tr><th>Имя</th><th>Роль</th><th>Действие</th></tr></thead><tbody></tbody></table>
+            <div id="emptyUsers" class="empty" hidden>Пользователей пока нет</div>
+        </div>
+    </section>
 </main>
+
+<div id="passwordModal" class="modal" hidden>
+    <div class="modal-content auth-modal-content">
+        <div class="modal-header"><h2>Вход в систему</h2></div>
+        <p id="passwordUserLabel" class="muted"></p>
+        <form id="passwordForm">
+            <label>Пароль<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+            <div id="loginError" class="form-error" hidden></div>
+            <div class="modal-actions"><button id="cancelLoginBtn" type="button" class="btn">Отмена</button><button type="submit" class="btn-primary">Войти</button></div>
+        </form>
+    </div>
+</div>
 
 <div id="modal" class="modal" hidden>
     <div class="modal-content">

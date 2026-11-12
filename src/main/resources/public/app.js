@@ -1,7 +1,12 @@
 const state = {
+    selectedDocumentDeviceId: null,
     devices: [],
     stats: { total: 0, overdue: 0, soon: 0, ok: 0 },
-    currentTab: 'all'
+    currentTab: 'all',
+    documents: [],
+    currentDocument: null,
+    users: [],
+    user: null
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -231,9 +236,18 @@ function switchTab(tabName) {
 
     state.currentTab = tabName;
 
-    // Загружаем данные для нужной вкладки
+    // Данные вкладок загружаются только после авторизации.
+    if (!state.user) return;
+    if (tabName === 'users' && state.user.role !== 'admin') { window.location.hash = 'all'; return; }
     if (tabName === 'audit') renderAuditTab(200);
     if (tabName === 'trash') renderTrashTab();
+    if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
+    if (tabName === 'documents') {
+        state.currentDocument = null;
+        $('#documentWorkspace').hidden = true;
+        $('#documentsListView').hidden = false;
+        loadDocuments().catch(e => showToast('Ошибка загрузки документов', e.message, 'error'));
+    }
 }
 
 // Слушаем изменения хэша (кнопки Назад/Вперёд)
@@ -261,6 +275,306 @@ $all('.tab').forEach(btn => {
 document.addEventListener('DOMContentLoaded', () => {
     const hash = window.location.hash.replace('#', '') || 'all';
     switchTab(hash);
+});
+
+// ==========================================
+// АВТОРИЗАЦИЯ И РОЛИ
+// ==========================================
+function roleTitle(role) { return role === 'admin' ? 'Администратор' : role === 'guest' ? 'Гость · просмотр' : 'Пользователь'; }
+
+function fillUserSelect() {
+    const select = $('#userSelect');
+    const current = state.user ? state.user.login : 'guest';
+    select.innerHTML = '<option value="guest">Гость (только просмотр)</option>' +
+        state.users.map(u => `<option value="${escapeHtml(u.login).replaceAll('"', '&quot;')}">${escapeHtml(u.name)}</option>`).join('');
+    select.value = current;
+}
+
+function applyRoleUI() {
+    const isAdmin = state.user && state.user.role === 'admin';
+    const isGuest = state.user && state.user.role === 'guest';
+    document.body.classList.toggle('read-only', !!isGuest);
+    document.body.classList.toggle('auth-locked', !state.user);
+    $all('.admin-only').forEach(el => { el.hidden = !isAdmin; });
+    $('#currentUser').textContent = state.user ? `${state.user.name} · ${roleTitle(state.user.role)}` : 'Не выполнен вход';
+    $('#logoutBtn').hidden = !state.user;
+    if (state.user) $('#userSelect').value = state.user.login;
+}
+
+async function initializeAuth() {
+    try {
+        const [usersResponse, meResponse] = await Promise.all([fetch('/api/auth/users'), fetch('/api/auth/me')]);
+        if (!usersResponse.ok || !meResponse.ok) throw new Error('Не удалось получить список пользователей');
+        state.users = await usersResponse.json();
+        const me = await meResponse.json();
+        fillUserSelect();
+        if (me.authenticated) {
+            state.user = me.user; applyRoleUI(); await afterLogin();
+        } else {
+            $('#userSelect').value = 'guest';
+            await loginSelectedUser('');
+        }
+    } catch (e) {
+        showToast('Ошибка авторизации', e.message, 'error');
+    }
+}
+
+async function afterLogin() {
+    applyRoleUI();
+    await loadAll();
+    switchTab(state.currentTab || 'all');
+}
+
+async function loginSelectedUser(password = '') {
+    const login = $('#userSelect').value;
+    if (!login) return;
+    const r = await fetch('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({login, password})});
+    if (!r.ok) { const err = await r.json().catch(()=>({})); $('#loginError').textContent = err.error || 'Ошибка входа'; $('#loginError').hidden = false; return false; }
+    const result = await r.json();
+    state.user = result.user;
+    $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#loginError').hidden = true;
+    await afterLogin();
+    showToast('Вход выполнен', `${state.user.name}: ${roleTitle(state.user.role)}`, 'info');
+    return true;
+}
+
+$('#userSelect').addEventListener('change', async () => {
+    const login = $('#userSelect').value;
+    if (!login) return;
+    if (login.toLowerCase() === 'guest') {
+        try { await loginSelectedUser(''); } catch (e) { showToast('Ошибка входа', e.message, 'error'); }
+        return;
+    }
+    const selected = state.users.find(u => u.login === login);
+    $('#passwordUserLabel').textContent = selected ? `Пользователь: ${selected.name}` : `Пользователь: ${login}`;
+    $('#loginError').hidden = true; $('#loginPassword').value = '';
+    $('#passwordModal').hidden = false; $('#loginPassword').focus();
+});
+
+$('#passwordForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    try { await loginSelectedUser($('#loginPassword').value); }
+    catch (err) { $('#loginError').textContent = err.message; $('#loginError').hidden = false; }
+});
+$('#cancelLoginBtn').addEventListener('click', () => {
+    $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#userSelect').value = state.user ? state.user.login : '';
+});
+$('#logoutBtn').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', {method:'POST'});
+    state.user = null;
+    $('#userSelect').value = 'guest';
+    await loginSelectedUser('');
+    if (state.currentTab === 'users') { window.location.hash = 'all'; }
+    showToast('Выполнен выход', 'Открыт режим гостя', 'info');
+});
+
+async function loadUsers() {
+    const r = await fetch('/api/users');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const users = await r.json();
+    $('#tableUsers tbody').innerHTML = users.map(u => `<tr><td>${escapeHtml(u.name)}</td><td>${u.role === 'admin' ? 'Администратор' : 'Пользователь'}</td><td>${u.role === 'admin' ? '<span class="muted">Защищённая учётная запись</span>' : `<button class="btn-danger btn-small" data-delete-user="${u.id}" data-user-name="${escapeHtml(u.name).replaceAll('\"','&quot;')}">Удалить</button>`}</td></tr>`).join('');
+    $('#emptyUsers').hidden = users.length > 0;
+}
+
+$('#createUserForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = $('#newUserName').value.trim(), password = $('#newUserPassword').value;
+    const r = await fetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,password})});
+    if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Не удалось создать пользователя', err.error || `HTTP ${r.status}`, 'error'); return; }
+    $('#newUserName').value = ''; $('#newUserPassword').value = '';
+    const usersResponse = await fetch('/api/auth/users'); state.users = await usersResponse.json(); fillUserSelect();
+    await loadUsers(); showToast('Пользователь создан', name, 'ok');
+});
+
+$('#tableUsers').addEventListener('click', async e => {
+    const btn = e.target.closest('button[data-delete-user]');
+    if (!btn) return;
+    const id = Number(btn.dataset.deleteUser);
+    const name = btn.dataset.userName || 'пользователя';
+    if (!confirm(`Удалить пользователя «${name}»? Его активные сессии будут завершены.`)) return;
+    const r = await fetch('/api/users/' + id, {method:'DELETE'});
+    if (!r.ok) {
+        const err = await r.json().catch(()=>({}));
+        showToast('Не удалось удалить пользователя', err.error || `HTTP ${r.status}`, 'error');
+        return;
+    }
+    const usersResponse = await fetch('/api/auth/users');
+    state.users = await usersResponse.json();
+    fillUserSelect();
+    await loadUsers();
+    showToast('Пользователь удалён', name, 'ok');
+});
+
+// ==========================================
+// ДОКУМЕНТЫ
+// ==========================================
+async function loadDocuments() {
+    const r = await fetch('/api/documents');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    state.documents = await r.json();
+    renderDocuments();
+}
+
+function renderDocuments() {
+    const q = ($('#searchDocuments').value || '').toLowerCase().trim();
+    const rows = state.documents.filter(d => !q || (d.title || '').toLowerCase().includes(q) || (d.documentNumber || '').toLowerCase().includes(q));
+    $('#tableDocuments tbody').innerHTML = rows.map(d => `
+        <tr data-document-id="${d.id}">
+            <td><strong>${escapeHtml(d.title)}</strong></td>
+            <td>${escapeHtml(d.documentNumber || '—')}</td>
+            <td>${formatDateTime(d.createdAt)}</td>
+            <td>${d.deviceCount || 0}</td>
+            <td>${escapeHtml(d.description || '—')}</td>
+        </tr>`).join('');
+    $('#emptyDocuments').hidden = rows.length > 0;
+}
+
+function openDocumentForm(doc = null) {
+    $('#documentModalTitle').textContent = doc ? 'Изменить документ' : 'Новый документ';
+    $('#documentId').value = doc ? doc.id : '';
+    $('#documentTitle').value = doc ? doc.title : '';
+    $('#documentNumber').value = doc ? (doc.documentNumber || '') : '';
+    $('#documentDescription').value = doc ? (doc.description || '') : '';
+    $('#documentModal').hidden = false;
+    $('#documentTitle').focus();
+}
+function closeDocumentForm() { $('#documentModal').hidden = true; }
+
+async function openDocument(id) {
+    const r = await fetch('/api/documents/' + id);
+    if (!r.ok) throw new Error('Не удалось открыть документ: HTTP ' + r.status);
+    state.currentDocument = await r.json();
+    renderDocumentWorkspace();
+}
+
+function renderDocumentWorkspace() {
+    const d = state.currentDocument;
+    if (!d) return;
+    $('#documentsListView').hidden = true;
+    $('#documentWorkspace').hidden = false;
+    $('#documentWorkspaceTitle').textContent = d.title || 'Документ';
+    $('#documentWorkspaceMeta').textContent = 'Документ № ' + (d.documentNumber || '—') + ' · ID ' + d.id;
+    $('#documentNumberView').textContent = d.documentNumber || '—';
+    $('#documentCreatedView').textContent = formatDateTime(d.createdAt);
+    $('#documentDescriptionView').textContent = d.description || '—';
+    const devices = d.devices || [];
+    $('#documentDeviceCount').textContent = devices.length + ' приборов';
+    $('#tableDocumentDevices tbody').innerHTML = devices.map(v => `
+        <tr>
+            <td class="photo-cell">${photoHtml(v)}</td>
+            <td>${escapeHtml(v.name)}</td><td>${escapeHtml(v.serialNumber || '—')}</td>
+            <td>${escapeHtml(v.location || '—')}</td><td>${formatDate(v.nextVerification)}</td>
+            <td><button class="btn-link" data-unlink-device="${v.id}">Убрать из документа</button></td>
+        </tr>`).join('');
+    $('#emptyDocumentDevices').hidden = devices.length > 0;
+}
+
+function closeDocumentWorkspace() {
+    state.currentDocument = null;
+    $('#documentWorkspace').hidden = true;
+    $('#documentsListView').hidden = false;
+    loadDocuments().catch(e => showToast('Ошибка загрузки документов', e.message, 'error'));
+}
+
+function renderDocumentDeviceSearch() {
+    const input = $('#documentDeviceSearch');
+    const results = $('#documentDeviceSearchResults');
+    const q = (input.value || '').trim().toLowerCase();
+    const linked = new Set((state.currentDocument?.devices || []).map(d => d.id));
+    const available = state.devices.filter(d => !linked.has(d.id));
+    const matches = q ? available.filter(d =>
+        (d.name || '').toLowerCase().includes(q) ||
+        (d.location || '').toLowerCase().includes(q) ||
+        (d.serialNumber || '').toLowerCase().includes(q)
+    ).slice(0, 10) : available.slice(0, 10);
+    results.innerHTML = matches.map(d => `<button type="button" class="device-search-result" role="option" data-select-document-device="${d.id}">
+        <strong>${escapeHtml(d.name)}</strong><span>${escapeHtml(d.serialNumber || 'Без зав. номера')} · ${escapeHtml(d.location || 'Позиция не указана')}</span>
+    </button>`).join('');
+    if (!matches.length) results.innerHTML = '<div class="device-search-empty">Ничего не найдено</div>';
+}
+
+async function showAddDeviceToDocument() {
+    if (!state.currentDocument) return;
+    const linked = new Set((state.currentDocument.devices || []).map(d => d.id));
+    const available = state.devices.filter(d => !linked.has(d.id));
+    if (!available.length) {
+        showToast('Нет доступных приборов', 'Все активные приборы уже добавлены в этот документ', 'info');
+        return;
+    }
+    state.selectedDocumentDeviceId = null;
+    $('#documentDeviceSearch').value = '';
+    $('#documentDeviceSelection').textContent = 'Прибор не выбран';
+    $('#confirmAddDeviceDocument').disabled = true;
+    renderDocumentDeviceSearch();
+    $('#addDeviceDocumentModal').hidden = false;
+    $('#documentDeviceSearch').focus();
+}
+
+$('#documentDeviceSearch').addEventListener('input', renderDocumentDeviceSearch);
+$('#documentDeviceSearchResults').addEventListener('click', e => {
+    const btn = e.target.closest('[data-select-document-device]');
+    if (!btn) return;
+    const id = Number(btn.dataset.selectDocumentDevice);
+    const device = state.devices.find(d => d.id === id);
+    if (!device) return;
+    state.selectedDocumentDeviceId = id;
+    $('#documentDeviceSelection').textContent = `Выбран: ${device.name}${device.serialNumber ? ' · ' + device.serialNumber : ''}`;
+    $('#confirmAddDeviceDocument').disabled = false;
+    $all('.device-search-result').forEach(el => el.classList.toggle('selected', el === btn));
+});
+
+$('#addDocumentBtn').addEventListener('click', () => openDocumentForm());
+$('#searchDocuments').addEventListener('input', renderDocuments);
+$('#documentModalClose').addEventListener('click', closeDocumentForm);
+$('#cancelDocumentBtn').addEventListener('click', closeDocumentForm);
+$('#backToDocumentsBtn').addEventListener('click', closeDocumentWorkspace);
+$('#editDocumentBtn').addEventListener('click', () => state.currentDocument && openDocumentForm(state.currentDocument));
+$('#deleteDocumentBtn').addEventListener('click', async () => {
+    const d = state.currentDocument;
+    if (!d || !confirm('Удалить документ «' + d.title + '»? Приборы останутся в общей базе.')) return;
+    const r = await fetch('/api/documents/' + d.id, {method:'DELETE'});
+    if (!r.ok) { showToast('Ошибка удаления документа', 'HTTP ' + r.status, 'error'); return; }
+    state.currentDocument = null;
+    $('#documentWorkspace').hidden = true; $('#documentsListView').hidden = false;
+    await loadDocuments(); showToast('Документ удалён', 'Приборы не удалялись', 'info');
+});
+$('#documentForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const id = $('#documentId').value;
+    const body = {title:$('#documentTitle').value.trim(), documentNumber:$('#documentNumber').value.trim(), description:$('#documentDescription').value.trim()};
+    const r = await fetch(id ? '/api/documents/' + id : '/api/documents', {method:id ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Ошибка сохранения', err.error || ('HTTP ' + r.status), 'error'); return; }
+    const saved = await r.json(); closeDocumentForm();
+    if (id) { state.currentDocument = saved; renderDocumentWorkspace(); }
+    await loadDocuments();
+    if (!id) await openDocument(saved.id);
+    showToast(id ? 'Документ обновлён' : 'Документ создан', saved.title, 'info');
+});
+$('#tableDocuments').addEventListener('click', e => {
+    const row = e.target.closest('tr[data-document-id]');
+    if (row) openDocument(Number(row.dataset.documentId)).catch(err => showToast('Ошибка', err.message, 'error'));
+});
+$('#addDeviceToDocumentBtn').addEventListener('click', showAddDeviceToDocument);
+$('#closeAddDeviceDocument').addEventListener('click', () => $('#addDeviceDocumentModal').hidden = true);
+$('#cancelAddDeviceDocument').addEventListener('click', () => $('#addDeviceDocumentModal').hidden = true);
+$('#confirmAddDeviceDocument').addEventListener('click', async () => {
+    const d = state.currentDocument, deviceId = Number(state.selectedDocumentDeviceId);
+    if (!d || !deviceId) return;
+    const r = await fetch(`/api/documents/${d.id}/devices/${deviceId}`, {method:'POST'});
+    if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Не удалось добавить прибор', err.error || ('HTTP ' + r.status), 'error'); return; }
+    state.currentDocument = await r.json(); renderDocumentWorkspace();
+    $('#addDeviceDocumentModal').hidden = true;
+    state.selectedDocumentDeviceId = null;
+    await loadDocuments(); showToast('Прибор добавлен в документ', '', 'info');
+});
+$('#tableDocumentDevices').addEventListener('click', async e => {
+    const btn = e.target.closest('button[data-unlink-device]');
+    if (!btn || !state.currentDocument) return;
+    const id = Number(btn.dataset.unlinkDevice);
+    if (!confirm('Убрать прибор из документа? Сам прибор останется в общей базе.')) return;
+    const r = await fetch(`/api/documents/${state.currentDocument.id}/devices/${id}`, {method:'DELETE'});
+    if (!r.ok) { showToast('Ошибка', 'HTTP ' + r.status, 'error'); return; }
+    state.currentDocument = await r.json(); renderDocumentWorkspace(); await loadDocuments();
 });
 
 // ==========================================
@@ -562,4 +876,4 @@ $('#viewPrintBtn').addEventListener('click', () => {
     printDeviceCard(currentViewDevice);
 });
 
-loadAll().catch(e => console.error(e));
+initializeAuth();
