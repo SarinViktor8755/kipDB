@@ -11,11 +11,10 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         Db.init();
-        System.out.println("SQLite инициализирован: kip.db");
-
-
-
-        TestData.seedIfEmpty();
+        System.out.println("SQLite инициализирован: " + Db.getDatabasePath());
+        System.out.println("Найдено приборов: " + Db.getAllDevices().size());
+        System.out.println("Пользователей: " + Db.getUsersPublic().length() + " (включая администратора)");
+        // Тестовые приборы автоматически не создаём: рабочая база должна оставаться без изменений.
 
 //        ConsoleReport.printSummary();
 //        ConsoleReport.printDevices(10);

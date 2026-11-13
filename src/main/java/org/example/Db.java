@@ -1,6 +1,12 @@
 package org.example;
 
 import java.sql.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.net.URI;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -11,7 +17,60 @@ import org.json.JSONObject;
 
 public class Db {
 
-    private static final String DB_URL = "jdbc:sqlite:kip.db";
+    // Сначала ищем существующую базу рядом с рабочей папкой и приложением.
+    // Это предотвращает создание новой пустой kip.db при запуске ярлыком из другой папки.
+    private static final Path DB_PATH = resolveDatabasePath();
+    private static final String DB_URL = "jdbc:sqlite:" + DB_PATH.toString().replace("\\", "/");
+
+    public static Path getDatabasePath() { return DB_PATH; }
+    public static Connection openConnection() throws SQLException { return DriverManager.getConnection(DB_URL); }
+
+    private static Path resolveDatabasePath() {
+        String configured = System.getProperty("kip.db.path");
+        if (configured == null || configured.isBlank()) configured = System.getenv("KIP_DB_PATH");
+        if (configured != null && !configured.isBlank()) return Paths.get(configured).toAbsolutePath().normalize();
+
+        Set<Path> bases = new LinkedHashSet<>();
+        Path cwd = Paths.get("").toAbsolutePath().normalize();
+        Path code = null;
+        try {
+            URI location = Db.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            code = Paths.get(location).toAbsolutePath().normalize();
+            if (Files.isRegularFile(code)) code = code.getParent();
+            addAncestors(bases, code); // сначала папка самого приложения
+        } catch (Exception ignored) { }
+        addAncestors(bases, cwd);
+
+        // Если найдено несколько kip.db (например, после запуска из разных папок),
+        // выбираем наиболее заполненный по размеру файл. Ничего не удаляем и не копируем.
+        Path best = null;
+        long bestSize = -1;
+        for (Path base : bases) {
+            Path candidate = base.resolve("kip.db");
+            if (!Files.isRegularFile(candidate)) continue;
+            try {
+                long size = Files.size(candidate);
+                Path wal = candidate.resolveSibling(candidate.getFileName() + "-wal");
+                if (Files.isRegularFile(wal)) size += Files.size(wal);
+                if (size > bestSize) { best = candidate; bestSize = size; }
+            } catch (Exception ignored) { }
+        }
+        if (best != null) return best;
+
+        // Если база ещё не создана, кладём её в корень проекта (при наличии pom.xml),
+        // иначе рядом с приложением, а не в случайную рабочую папку процесса.
+        for (Path base : bases) if (Files.isRegularFile(base.resolve("pom.xml"))) return base.resolve("kip.db");
+        try {
+            Path codePath = Paths.get(Db.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toAbsolutePath().normalize();
+            if (Files.isRegularFile(codePath)) codePath = codePath.getParent();
+            return codePath.resolve("kip.db");
+        } catch (Exception ignored) { return cwd.resolve("kip.db"); }
+    }
+
+    private static void addAncestors(Set<Path> result, Path start) {
+        Path p = start;
+        for (int i = 0; p != null && i < 8; i++, p = p.getParent()) result.add(p);
+    }
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("HH:mm_dd.MM.yy");
     private static final DateTimeFormatter DB_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -45,6 +104,7 @@ public class Db {
             try { s.execute("ALTER TABLE devices ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch (SQLException ignored) {}
             try { s.execute("ALTER TABLE devices ADD COLUMN version INTEGER DEFAULT 1"); } catch (SQLException ignored) {}
             try { s.execute("ALTER TABLE devices ADD COLUMN created_at TEXT"); } catch (SQLException ignored) {}
+            try { s.execute("ALTER TABLE devices ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'"); } catch (SQLException ignored) {}
 
             // Заполняем created_at для старых записей, у которых его нет
             try {
@@ -77,6 +137,33 @@ public class Db {
             // Миграции: поля документа можно расширять без изменения связей с приборами.
             try { s.execute("ALTER TABLE documents ADD COLUMN custom_fields_json TEXT NOT NULL DEFAULT '{}'"); }
             catch (SQLException ignored) {}
+
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS device_movements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id INTEGER NOT NULL,
+                    event_date TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    from_place TEXT,
+                    to_place TEXT,
+                    note TEXT,
+                    created_by TEXT,
+                    created_at TEXT NOT NULL
+                );
+                """);
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS device_document_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id INTEGER NOT NULL,
+                    document_id INTEGER,
+                    document_title TEXT NOT NULL,
+                    document_number TEXT,
+                    event_type TEXT NOT NULL,
+                    event_date TEXT NOT NULL,
+                    created_by TEXT,
+                    created_at TEXT NOT NULL
+                );
+                """);
 
             s.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -124,6 +211,89 @@ public class Db {
                 }
             }
         }
+        importSampleDevicesIfEmpty();
+        migrateLegacyMovementHistory();
+        seedCurrentDocumentHistory();
+    }
+
+    // Переносим старый текстовый столбец «Движение» в отдельные события, сохраняя исходные формулировки.
+    private static void migrateLegacyMovementHistory() throws SQLException {
+        try (Connection c=DriverManager.getConnection(DB_URL);
+             PreparedStatement ps=c.prepareStatement("SELECT id,details_json FROM devices WHERE details_json IS NOT NULL AND details_json <> '{}' ");
+             ResultSet rs=ps.executeQuery()) {
+            while (rs.next()) {
+                long deviceId=rs.getLong(1);
+                JSONObject details;
+                try { details=new JSONObject(rs.getString(2)); } catch(Exception ex) { continue; }
+                String legacy=details.optString("movement","").trim();
+                if (legacy.isEmpty() || "—".equals(legacy)) continue;
+                for (String part : legacy.split("\\s*;\\s*")) {
+                    String entry=part.trim(); if(entry.isEmpty()) continue;
+                    String date=LocalDate.now().toString();
+                    String description=entry;
+                    java.util.regex.Matcher m=java.util.regex.Pattern.compile("^(\\d{2})\\.(\\d{2})\\.(\\d{4})\\s*:\\s*(.*)$").matcher(entry);
+                    if(m.matches()) { date=m.group(3)+"-"+m.group(2)+"-"+m.group(1); description=m.group(4).trim(); }
+                    String type=description;
+                    String from="",to="";
+                    java.util.regex.Matcher removed=java.util.regex.Pattern.compile("Снят с\\s+([^;]+)",java.util.regex.Pattern.CASE_INSENSITIVE).matcher(description);
+                    java.util.regex.Matcher installed=java.util.regex.Pattern.compile("Установлен на\\s+([^;]+)",java.util.regex.Pattern.CASE_INSENSITIVE).matcher(description);
+                    if(removed.find()) { type="Снят с позиции"; from=removed.group(1).trim(); }
+                    else if(installed.find()) { type="Установлен"; to=installed.group(1).trim(); }
+                    else if(description.toLowerCase().contains("поверк")) type=description.toLowerCase().contains("после")?"Возвращён после поверки":"Передан на поверку";
+                    else if(description.toLowerCase().contains("калибров")) type=description.toLowerCase().contains("после")?"Возвращён после калибровки":"Передан на калибровку";
+                    else if(description.toLowerCase().contains("ремонт")) type=description.toLowerCase().contains("после")?"Возвращён из ремонта":"Передан в ремонт";
+                    try (PreparedStatement exists=c.prepareStatement("SELECT 1 FROM device_movements WHERE device_id=? AND note=? LIMIT 1")) {
+                        exists.setLong(1,deviceId); exists.setString(2,entry);
+                        try(ResultSet er=exists.executeQuery()) { if(er.next()) continue; }
+                    }
+                    try (PreparedStatement ins=c.prepareStatement("INSERT INTO device_movements(device_id,event_date,event_type,from_place,to_place,note,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)")) {
+                        ins.setLong(1,deviceId); ins.setString(2,date); ins.setString(3,type); ins.setString(4,from); ins.setString(5,to); ins.setString(6,entry); ins.setString(7,"Импорт из старой колонки"); ins.setString(8,LocalDateTime.now().format(DB_DATE_FORMAT)); ins.executeUpdate();
+                    }
+                }
+            }
+        }
+    }
+
+    // Для уже существующих связей с документами создаём начальные записи истории.
+    private static void seedCurrentDocumentHistory() throws SQLException {
+        try (Connection c=DriverManager.getConnection(DB_URL); Statement st=c.createStatement()) {
+            // Сначала переносим уже накопленные операции включения/исключения из общего журнала.
+            st.executeUpdate("INSERT INTO device_document_history(device_id,document_id,document_title,document_number,event_type,event_date,created_by,created_at) " +
+                    "SELECT a.device_id,a.document_id,COALESCE(a.entity_name,'Документ'),COALESCE(a.entity_number,'')," +
+                    "CASE WHEN a.action='Прибор добавлен в документ' THEN 'Включён в документ' ELSE 'Исключён из документа' END," +
+                    "'20'||substr(a.changed_at,13,2)||'-'||substr(a.changed_at,10,2)||'-'||substr(a.changed_at,7,2),a.changed_by,datetime('now') " +
+                    "FROM audit_log a WHERE a.device_id IS NOT NULL AND a.document_id IS NOT NULL " +
+                    "AND a.action IN ('Прибор добавлен в документ','Прибор удален из документа') " +
+                    "AND NOT EXISTS(SELECT 1 FROM device_document_history h WHERE h.device_id=a.device_id AND h.document_id=a.document_id AND h.event_type=CASE WHEN a.action='Прибор добавлен в документ' THEN 'Включён в документ' ELSE 'Исключён из документа' END AND h.event_date='20'||substr(a.changed_at,13,2)||'-'||substr(a.changed_at,10,2)||'-'||substr(a.changed_at,7,2))");
+            // Для связей, которые уже существуют, но не имеют записи журнала, создаём начальное событие.
+            st.executeUpdate("INSERT INTO device_document_history(device_id,document_id,document_title,document_number,event_type,event_date,created_by,created_at) " +
+                    "SELECT dd.device_id,d.id,d.title,d.document_number,'Включён в документ',substr(dd.added_at,1,10),'Миграция',datetime('now') " +
+                    "FROM document_devices dd JOIN documents d ON d.id=dd.document_id " +
+                    "WHERE NOT EXISTS(SELECT 1 FROM device_document_history h WHERE h.device_id=dd.device_id AND h.document_id=dd.document_id AND h.event_type='Включён в документ')");
+        }
+    }
+
+    private static void importSampleDevicesIfEmpty() throws SQLException {
+        try (Connection c = DriverManager.getConnection(DB_URL); Statement st = c.createStatement(); ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM devices")) {
+            if (rs.next() && rs.getLong(1) > 0) return;
+        }
+        try (java.io.InputStream in = Db.class.getResourceAsStream("/devices-test-data.json")) {
+            if (in == null) return;
+            JSONArray rows = new JSONArray(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            try (Connection c = DriverManager.getConnection(DB_URL); PreparedStatement ps = c.prepareStatement(
+                    "INSERT INTO devices(serial_number,name,location,last_verification,next_verification,is_deleted,version,created_at,details_json) VALUES(?,?,?,?,?,0,1,?,?)")) {
+                c.setAutoCommit(false);
+                String now = LocalDateTime.now().format(DB_DATE_FORMAT);
+                for (int i=0; i<rows.length(); i++) {
+                    JSONObject row = rows.getJSONObject(i);
+                    ps.setString(1,row.optString("serialNumber","")); ps.setString(2,row.optString("name","Прибор"));
+                    ps.setString(3,row.optString("location","")); ps.setString(4,row.optString("lastVerification",""));
+                    ps.setString(5,row.optString("nextVerification","")); ps.setString(6,now);
+                    ps.setString(7,row.getJSONObject("details").toString()); ps.addBatch();
+                }
+                ps.executeBatch(); c.commit();
+            } catch (Exception e) { throw new SQLException("Не удалось загрузить тестовые приборы",e); }
+        } catch (java.io.IOException e) { throw new SQLException("Не удалось прочитать тестовые данные",e); }
     }
 
     public static JSONArray getUsersPublic() throws SQLException {
@@ -210,7 +380,7 @@ public class Db {
         try (Connection c = DriverManager.getConnection(DB_URL);
              Statement s = c.createStatement();
              ResultSet rs = s.executeQuery(
-                     "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at " +
+                     "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at, details_json " +
                              "FROM devices WHERE is_deleted = 0 ORDER BY next_verification ASC")) {
             while (rs.next()) result.add(readDevice(rs));
         }
@@ -222,7 +392,7 @@ public class Db {
         try (Connection c = DriverManager.getConnection(DB_URL);
              Statement s = c.createStatement();
              ResultSet rs = s.executeQuery(
-                     "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at " +
+                     "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at, details_json " +
                              "FROM devices WHERE is_deleted = 1 ORDER BY id DESC")) {
             while (rs.next()) result.add(readDevice(rs));
         }
@@ -232,7 +402,7 @@ public class Db {
     public static Device getDevice(long id) throws SQLException {
         try (Connection c = DriverManager.getConnection(DB_URL);
              PreparedStatement ps = c.prepareStatement(
-                     "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at " +
+                     "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at, details_json " +
                              "FROM devices WHERE id = ?")) {
             ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
@@ -243,18 +413,11 @@ public class Db {
     }
 
     private static Device readDevice(ResultSet rs) throws SQLException {
-        return new Device(
-                rs.getLong("id"),
-                rs.getString("serial_number"),
-                rs.getString("name"),
-                rs.getString("location"),
-                rs.getString("last_verification"),
-                rs.getString("next_verification"),
-                rs.getString("photo_path"),
-                rs.getString("photo_thumb_path"),
-                rs.getInt("version"),
-                rs.getString("created_at")
-        );
+        Device d = new Device(rs.getLong("id"), rs.getString("serial_number"), rs.getString("name"),
+                rs.getString("location"), rs.getString("last_verification"), rs.getString("next_verification"),
+                rs.getString("photo_path"), rs.getString("photo_thumb_path"), rs.getInt("version"), rs.getString("created_at"));
+        d.detailsJson = rs.getString("details_json");
+        return d;
     }
 
     public static long createDevice(Device d, String user) throws SQLException {
@@ -264,8 +427,8 @@ public class Db {
                 long id;
                 String now = LocalDateTime.now().format(DB_DATE_FORMAT);
                 try (PreparedStatement ps = c.prepareStatement(
-                        "INSERT INTO devices(serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, is_deleted, version, created_at) " +
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)",
+                        "INSERT INTO devices(serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, is_deleted, version, created_at, details_json) " +
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)",
                         Statement.RETURN_GENERATED_KEYS)) {
                     ps.setString(1, d.serialNumber);
                     ps.setString(2, d.name);
@@ -275,6 +438,7 @@ public class Db {
                     ps.setString(6, d.photoPath);
                     ps.setString(7, d.photoThumbPath);
                     ps.setString(8, now);
+                    ps.setString(9, d.detailsJson == null ? "{}" : d.detailsJson);
                     ps.executeUpdate();
                     try (ResultSet rs = ps.getGeneratedKeys()) {
                         rs.next();
@@ -325,7 +489,7 @@ public class Db {
 
                 try (PreparedStatement ps = c.prepareStatement(
                         "UPDATE devices SET serial_number=?, name=?, location=?, last_verification=?, " +
-                                "next_verification=?, photo_path=?, photo_thumb_path=?, version = version + 1 WHERE id=? AND version=?")) {
+                                "next_verification=?, photo_path=?, photo_thumb_path=?, details_json=?, version = version + 1 WHERE id=? AND version=?")) {
                     ps.setString(1, d.serialNumber);
                     ps.setString(2, d.name);
                     ps.setString(3, d.location);
@@ -333,8 +497,9 @@ public class Db {
                     ps.setString(5, d.nextVerification);
                     ps.setString(6, finalPhotoPath);
                     ps.setString(7, finalPhotoThumb);
-                    ps.setLong(8, d.id);
-                    ps.setInt(9, old.version);
+                    ps.setString(8, (d.detailsJson == null || "{}".equals(d.detailsJson)) ? old.detailsJson : d.detailsJson);
+                    ps.setLong(9, d.id);
+                    ps.setInt(10, old.version);
                     int updated = ps.executeUpdate();
                     if (updated == 0) {
                         c.rollback();
@@ -500,7 +665,7 @@ public class Db {
                 JSONArray devices = new JSONArray();
                 try (PreparedStatement dp = c.prepareStatement("""
                     SELECT v.id, v.serial_number, v.name, v.location, v.last_verification,
-                           v.next_verification, v.photo_path, v.photo_thumb_path, v.version, v.created_at
+                           v.next_verification, v.photo_path, v.photo_thumb_path, v.version, v.created_at, v.details_json
                     FROM document_devices dd
                     JOIN devices v ON v.id=dd.device_id
                     WHERE dd.document_id=? AND v.is_deleted=0
@@ -708,6 +873,9 @@ public class Db {
                     logDocument(c, documentId, deviceId, user, "Прибор добавлен в документ",
                             documentLabel(docTitle, docNumber) + "; прибор: " + deviceName +
                                     (serial == null || serial.isBlank() ? "" : "; зав. № " + serial));
+                    try (PreparedStatement hist=c.prepareStatement("INSERT INTO device_document_history(device_id,document_id,document_title,document_number,event_type,event_date,created_by) VALUES(?,?,?,?,?,?,?)")) {
+                        hist.setLong(1,deviceId); hist.setLong(2,documentId); hist.setString(3,docTitle); hist.setString(4,docNumber); hist.setString(5,"Включён в документ"); hist.setString(6,LocalDate.now().toString()); hist.setString(7,user); hist.executeUpdate();
+                    }
                 }
                 c.commit();
                 return true;
@@ -754,6 +922,9 @@ public class Db {
                     logDocument(c, documentId, deviceId, user, "Прибор удален из документа",
                             documentLabel(docTitle, docNumber) + "; прибор: " + deviceName +
                                     (serial == null || serial.isBlank() ? "" : "; зав. № " + serial));
+                    try (PreparedStatement hist=c.prepareStatement("INSERT INTO device_document_history(device_id,document_id,document_title,document_number,event_type,event_date,created_by) VALUES(?,?,?,?,?,?,?)")) {
+                        hist.setLong(1,deviceId); hist.setLong(2,documentId); hist.setString(3,docTitle); hist.setString(4,docNumber); hist.setString(5,"Исключён из документа"); hist.setString(6,LocalDate.now().toString()); hist.setString(7,user); hist.executeUpdate();
+                    }
                 }
                 c.commit();
                 return deleted > 0;
@@ -763,6 +934,54 @@ public class Db {
             } finally {
                 c.setAutoCommit(true);
             }
+        }
+    }
+
+    public static JSONArray getDeviceMovementHistory(long deviceId) throws SQLException {
+        JSONArray result = new JSONArray();
+        try (Connection c = DriverManager.getConnection(DB_URL);
+             PreparedStatement ps = c.prepareStatement("SELECT id,event_date,event_type,from_place,to_place,note,created_by,created_at FROM device_movements WHERE device_id=? ORDER BY event_date DESC,id DESC")) {
+            ps.setLong(1, deviceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.put(new JSONObject().put("id",rs.getLong(1)).put("eventDate",rs.getString(2))
+                        .put("eventType",rs.getString(3)).put("fromPlace",rs.getString(4)==null?"":rs.getString(4))
+                        .put("toPlace",rs.getString(5)==null?"":rs.getString(5)).put("note",rs.getString(6)==null?"":rs.getString(6))
+                        .put("createdBy",rs.getString(7)==null?"":rs.getString(7)).put("createdAt",rs.getString(8)));
+            }
+        }
+        return result;
+    }
+
+    public static JSONArray getDeviceDocumentHistory(long deviceId) throws SQLException {
+        JSONArray result = new JSONArray();
+        try (Connection c = DriverManager.getConnection(DB_URL);
+             PreparedStatement ps = c.prepareStatement("SELECT id,document_id,document_title,document_number,event_type,event_date,created_by FROM device_document_history WHERE device_id=? ORDER BY id DESC")) {
+            ps.setLong(1, deviceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.put(new JSONObject().put("id",rs.getLong(1)).put("documentId",rs.getObject(2)==null?JSONObject.NULL:rs.getLong(2))
+                        .put("documentTitle",rs.getString(3)).put("documentNumber",rs.getString(4)==null?"":rs.getString(4))
+                        .put("eventType",rs.getString(5)).put("eventDate",rs.getString(6)).put("createdBy",rs.getString(7)==null?"":rs.getString(7)));
+            }
+        }
+        return result;
+    }
+
+    public static void addDeviceMovement(long deviceId, String eventDate, String eventType, String fromPlace, String toPlace, String note, String user) throws SQLException {
+        try (Connection c = DriverManager.getConnection(DB_URL)) {
+            c.setAutoCommit(false);
+            try {
+                try (PreparedStatement ps = c.prepareStatement("INSERT INTO device_movements(device_id,event_date,event_type,from_place,to_place,note,created_by,created_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND is_deleted=0)")) {
+                    ps.setLong(1,deviceId); ps.setString(2,eventDate); ps.setString(3,eventType); ps.setString(4,fromPlace); ps.setString(5,toPlace); ps.setString(6,note); ps.setString(7,user); ps.setString(8,LocalDateTime.now().format(DB_DATE_FORMAT)); ps.setLong(9,deviceId);
+                    if (ps.executeUpdate()==0) throw new SQLException("Прибор не найден");
+                }
+                // Для операций установки обновляем текущую позицию прибора.
+                if ("Установлен".equals(eventType) && toPlace != null && !toPlace.isBlank()) {
+                    try (PreparedStatement ps=c.prepareStatement("UPDATE devices SET location=?,version=version+1 WHERE id=?")) { ps.setString(1,toPlace); ps.setLong(2,deviceId); ps.executeUpdate(); }
+                }
+                log(c,deviceId,user,"MOVEMENT",eventType + (fromPlace==null||fromPlace.isBlank()?"":"; откуда: "+fromPlace) + (toPlace==null||toPlace.isBlank()?"":"; куда: "+toPlace) + (note==null||note.isBlank()?"":"; "+note));
+                c.commit();
+            } catch(SQLException e) { c.rollback(); throw e; }
+            finally { c.setAutoCommit(true); }
         }
     }
 

@@ -240,6 +240,21 @@ public class ApiHandler implements HttpHandler {
                 return;
             }
 
+            if (path.matches("/api/devices/[0-9]+/movements")) {
+                long deviceId = Long.parseLong(path.split("/")[3]);
+                if ("GET".equals(method)) {
+                    sendJson(ex, 200, new JSONObject().put("movements", Db.getDeviceMovementHistory(deviceId)).put("documents", Db.getDeviceDocumentHistory(deviceId)));
+                } else if ("POST".equals(method)) {
+                    JSONObject b=readJson(ex);
+                    String eventDate=b.optString("eventDate", LocalDate.now().toString()).trim();
+                    String eventType=b.optString("eventType","").trim();
+                    if (eventType.isEmpty() || !eventDate.matches("\\d{4}-\\d{2}-\\d{2}")) { sendJson(ex,400,new JSONObject().put("error","Укажите тип операции и корректную дату")); return; }
+                    Db.addDeviceMovement(deviceId,eventDate,eventType,emptyToNull(b.optString("fromPlace","")),emptyToNull(b.optString("toPlace","")),emptyToNull(b.optString("note","")),currentUserName());
+                    sendJson(ex,201,new JSONObject().put("movements",Db.getDeviceMovementHistory(deviceId)).put("documents",Db.getDeviceDocumentHistory(deviceId)));
+                } else methodNotAllowed(ex);
+                return;
+            }
+
             if (path.equals("/api/devices")) {
                 if ("GET".equals(method)) listDevices(ex);
                 else if ("POST".equals(method)) createDevice(ex);
@@ -557,31 +572,29 @@ public class ApiHandler implements HttpHandler {
     }
 
     private static JSONObject toJson(Device d) {
-        return new JSONObject()
-                .put("id", d.id)
-                .put("serialNumber", d.serialNumber == null ? "" : d.serialNumber)
-                .put("name", d.name == null ? "" : d.name)
-                .put("location", d.location == null ? "" : d.location)
+        JSONObject result;
+        try { result = new JSONObject(d.detailsJson == null || d.detailsJson.isBlank() ? "{}" : d.detailsJson); }
+        catch (Exception ignored) { result = new JSONObject(); }
+        result.put("id", d.id).put("serialNumber", d.serialNumber == null ? "" : d.serialNumber)
+                .put("name", d.name == null ? "" : d.name).put("location", d.location == null ? "" : d.location)
                 .put("lastVerification", d.lastVerification == null ? "" : d.lastVerification)
                 .put("nextVerification", d.nextVerification == null ? "" : d.nextVerification)
                 .put("photoPath", (d.photoPath == null || d.photoPath.trim().isEmpty()) ? JSONObject.NULL : d.photoPath)
                 .put("photoThumbPath", (d.photoThumbPath == null || d.photoThumbPath.trim().isEmpty()) ? JSONObject.NULL : d.photoThumbPath)
-                .put("version", d.version)
-                .put("createdAt", d.createdAt == null ? "" : d.createdAt);
+                .put("version", d.version).put("createdAt", d.createdAt == null ? "" : d.createdAt);
+        return result;
     }
 
     private static Device fromJson(JSONObject o, long id) {
-        Device d = new Device();
-        d.id = id;
-        d.serialNumber = emptyToNull(o.optString("serialNumber", null));
-        d.name = o.optString("name", null);
-        d.location = o.optString("location", null);
-        d.lastVerification = emptyToNull(o.optString("lastVerification", null));
-        d.nextVerification = emptyToNull(o.optString("nextVerification", null));
-        d.photoPath = emptyToNull(o.optString("photoPath", null));
-        d.photoThumbPath = emptyToNull(o.optString("photoThumbPath", null));
-        d.version = o.optInt("version", 0);
-        return d;
+        Device d = new Device(); d.id = id;
+        d.serialNumber = emptyToNull(o.optString("serialNumber", null)); d.name = o.optString("name", null);
+        d.location = o.optString("location", null); d.lastVerification = emptyToNull(o.optString("lastVerification", null));
+        d.nextVerification = emptyToNull(o.optString("nextVerification", null)); d.photoPath = emptyToNull(o.optString("photoPath", null));
+        d.photoThumbPath = emptyToNull(o.optString("photoThumbPath", null)); d.version = o.optInt("version", 0);
+        JSONObject details = new JSONObject();
+        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName"};
+        for (String key : keys) if (o.has(key)) details.put(key, o.opt(key));
+        d.detailsJson = details.toString(); return d;
     }
 
     private static String emptyToNull(String s) { return s == null || s.trim().isEmpty() ? null : s; }

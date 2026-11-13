@@ -25,6 +25,7 @@
     <a href="#audit" class="tab" data-tab="audit">Журнал</a>
     <a href="#trash" class="tab" data-tab="trash">Корзина</a>
     <a href="#users" class="tab admin-only" data-tab="users" hidden>Пользователи</a>
+    <a href="#help" class="tab tab-help" data-tab="help">Инструкция</a>
 </nav>
 
 <main>
@@ -49,20 +50,16 @@
             <button id="addBtn" class="btn-primary">+ Добавить прибор</button>
             <a href="/api/export.csv" class="btn">Экспорт CSV</a>
         </div>
-        <table id="tableAll" class="devices">
-            <thead>
-            <tr>
-                <th style="width:56px">Фото</th>
-                <th>Наименование</th>
-                <th>Зав. номер</th>
-                <th>Позиция</th>
-                <th>Последняя</th>
-                <th>Следующая</th>
-                <th>Статус</th>
-            </tr>
-            </thead>
-            <tbody></tbody>
+        <div class="devices-table-scroll">
+        <table id="tableAll" class="devices instruments-table">
+            <thead><tr>
+                <th>Заводской номер</th><th>Позиция</th><th>Тип датчика</th><th>Шкала</th><th>П/К</th>
+                <th>Дата поверки</th><th>МПИ</th><th>Дата следующей поверки</th>
+                <th>Класс точности</th><th>Красная черта</th><th>Списание</th>
+                <th>Отложенная поверка</th><th>Движение</th><th>Строка</th><th>Группа</th><th>Наименование позиции</th>
+            </tr></thead><tbody></tbody>
         </table>
+        </div>
         <div id="emptyAll" class="empty" hidden>Нет приборов</div>
     </section>
 
@@ -175,6 +172,175 @@
         <div id="emptyTrash" class="empty" hidden>Корзина пуста</div>
     </section>
 
+    <section id="tab-help" class="tab-panel help-page">
+        <div class="help-header">
+            <div>
+                <div class="help-kicker">СПРАВОЧНЫЙ РАЗДЕЛ</div>
+                <h1>Инструкция по работе с приложением «Приборы КИП»</h1>
+                <p class="muted">Руководство пользователя: учёт приборов, документы, журнал операций и управление доступом.</p>
+            </div>
+            <button class="btn" type="button" onclick="window.print()">Печать инструкции</button>
+        </div>
+
+        <div class="help-layout">
+            <aside class="help-toc">
+                <strong>Содержание</strong>
+                <a href="#help-start">1. Начало работы</a>
+                <a href="#help-roles">2. Пользователи и права</a>
+                <a href="#help-devices">3. Все приборы</a>
+                <a href="#help-card">4. Карточка прибора</a>
+                <a href="#help-documents">5. Документы</a>
+                <a href="#help-audit">6. Журнал</a>
+                <a href="#help-trash">7. Корзина</a>
+                <a href="#help-export">8. Экспорт и печать</a>
+                <a href="#help-rules">9. Рекомендации</a>
+            </aside>
+
+            <div class="help-content">
+                <section id="help-start" class="help-section">
+                    <h2>1. Начало работы</h2>
+                    <p>Приложение предназначено для ведения перечня приборов КИП, контроля дат поверки, формирования документов с перечнями приборов и просмотра истории операций.</p>
+                    <p>Основные разделы расположены в верхнем меню:</p>
+                    <ul>
+                        <li><b>Все приборы</b> — общий перечень приборов и поиск по нему.</li>
+                        <li><b>Документы</b> — создание документов и формирование состава приборов в каждом документе.</li>
+                        <li><b>Журнал</b> — история действий пользователей.</li>
+                        <li><b>Корзина</b> — приборы, перемещённые из основного перечня; их можно восстановить.</li>
+                        <li><b>Пользователи</b> — административный раздел, доступный только администратору.</li>
+                        <li><b>Инструкция</b> — текущая справочная страница.</li>
+                    </ul>
+                    <p>Для перехода между разделами нажмите соответствующий пункт меню. Приложение работает в браузере; при работе нескольких сотрудников используйте адрес сервера, выданный администратором локальной сети.</p>
+                </section>
+
+                <section id="help-roles" class="help-section">
+                    <h2>2. Пользователи и права доступа</h2>
+                    <h3>Выбор пользователя</h3>
+                    <ol>
+                        <li>В верхней части страницы найдите поле «Пользователь».</li>
+                        <li>Выберите «Гость (только просмотр)», чтобы просматривать данные без авторизации.</li>
+                        <li>Для работы от имени сотрудника выберите его имя. Откроется окно ввода пароля.</li>
+                        <li>Введите пароль и подтвердите вход. При ошибке проверьте раскладку клавиатуры и регистр символов.</li>
+                        <li>Для завершения работы нажмите «Выйти» — приложение переключится в гостевой режим.</li>
+                    </ol>
+                    <div class="help-note"><b>Сессионный вход.</b> Авторизация рассчитана на текущую сессию браузера. После завершения сессии потребуется выбрать пользователя и войти снова.</div>
+                    <h3>Роли</h3>
+                    <div class="help-role-grid">
+                        <div><b>Гость</b><p>Может просматривать приборы, документы и журнал. Не может создавать, изменять, удалять или восстанавливать записи.</p></div>
+                        <div><b>Пользователь</b><p>Может выполнять рабочие операции с приборами и документами, а также пользоваться журналом и корзиной. Не может управлять учётными записями.</p></div>
+                        <div><b>Администратор</b><p>Имеет все рабочие права и дополнительно может создавать и удалять обычных пользователей.</p></div>
+                    </div>
+                    <p>Административный пункт «Пользователи» отображается только после входа администратора. Права проверяются сервером; скрытие элементов интерфейса не является единственной защитой.</p>
+                </section>
+
+                <section id="help-devices" class="help-section">
+                    <h2>3. Раздел «Все приборы»</h2>
+                    <p>В таблице отображаются фотография, наименование, заводской номер, позиция, дата последней поверки, дата следующей поверки и текущий статус прибора.</p>
+                    <h3>Поиск и фильтрация</h3>
+                    <ul>
+                        <li>Введите часть наименования, заводского номера или позиции в поле поиска. Список отфильтруется по мере ввода.</li>
+                        <li>Фильтр статуса позволяет показать все приборы, просроченные, те, у которых поверка скоро, или приборы в норме.</li>
+                        <li>Сортировка позволяет упорядочить список по наименованию (А–Я или Я–А), а также по дате создания — сначала новые или сначала старые.</li>
+                        <li>Чтобы сбросить фильтры, очистите поле поиска и выберите «Все статусы».</li>
+                    </ul>
+                    <h3>Добавление прибора</h3>
+                    <ol>
+                        <li>Нажмите «+ Добавить прибор».</li>
+                        <li>Заполните заводской номер, наименование и позицию. Укажите даты последней и следующей поверки, если они известны.</li>
+                        <li>При необходимости выберите фотографию прибора.</li>
+                        <li>Нажмите «Сохранить».</li>
+                    </ol>
+                    <p>Поля заводского номера и позиции помогают идентифицировать прибор. Старайтесь использовать единый формат записи, принятый на предприятии.</p>
+                    <h3>Статусы поверки</h3>
+                    <ul>
+                        <li><span class="status status-overdue">Просрочено</span> — дата следующей поверки раньше текущей даты.</li>
+                        <li><span class="status status-soon">Скоро</span> — до следующей поверки осталось не более 30 дней.</li>
+                        <li><span class="status status-ok">В норме</span> — дата поверки позже 30-дневного интервала либо дата следующей поверки не задана.</li>
+                    </ul>
+                    <div class="help-note">Статус рассчитывается автоматически по полю «Дата следующей поверки». Если дата не заполнена, приложение показывает статус «В норме» — это не заменяет проверку полноты исходных данных.</div>
+                </section>
+
+                <section id="help-card" class="help-section">
+                    <h2>4. Просмотр и редактирование карточки прибора</h2>
+                    <p>Нажмите на строку прибора в таблице «Все приборы», чтобы открыть его карточку. В ней доступны основные сведения, фотография и статус поверки.</p>
+                    <ul>
+                        <li><b>Изменить</b> — открывает форму редактирования. После внесения изменений нажмите «Сохранить».</li>
+                        <li><b>Печать</b> — формирует печатную карточку прибора с основными реквизитами, датой формирования и полями для ответственного и подписи.</li>
+                        <li><b>Удалить</b> — перемещает прибор в корзину. Это не означает немедленное окончательное удаление записи.</li>
+                    </ul>
+                    <p>При редактировании приложение контролирует конкурентные изменения. Если другой пользователь успел изменить ту же запись, появится сообщение о конфликте; обновите данные и повторите операцию.</p>
+                </section>
+
+                <section id="help-documents" class="help-section">
+                    <h2>5. Раздел «Документы»</h2>
+                    <p>Документ объединяет несколько приборов в один перечень. Один и тот же прибор может быть включён в разные документы; привязка к документу не создаёт копию прибора.</p>
+                    <h3>Создание документа</h3>
+                    <ol>
+                        <li>Откройте раздел «Документы» и нажмите «+ Создать документ».</li>
+                        <li>Укажите обязательное название документа.</li>
+                        <li>При необходимости заполните номер и описание.</li>
+                        <li>Нажмите «Сохранить». Дата создания назначается приложением автоматически.</li>
+                    </ol>
+                    <h3>Работа с документом</h3>
+                    <ol>
+                        <li>Найдите документ в списке. Поиск работает по названию и номеру.</li>
+                        <li>Нажмите на строку документа — откроется отдельная рабочая область.</li>
+                        <li>Кнопка «Изменить реквизиты» позволяет изменить название, номер и описание. Дата создания при редактировании сохраняется.</li>
+                        <li>Нажмите «+ Добавить прибор» для включения прибора в документ.</li>
+                        <li>Введите часть наименования, заводского номера или позиции. Под полем поиска появятся до 10 совпадений.</li>
+                        <li>Выберите нужную строку в результатах и нажмите «Добавить».</li>
+                        <li>Для исключения прибора из документа используйте действие удаления напротив него. Сам прибор при этом остаётся в общем перечне.</li>
+                    </ol>
+                    <div class="help-note"><b>Важно:</b> удаление документа удаляет сам документ и его связи с приборами, но не удаляет приборы из общего справочника.</div>
+                </section>
+
+                <section id="help-audit" class="help-section">
+                    <h2>6. Раздел «Журнал»</h2>
+                    <p>Журнал предназначен для контроля выполненных операций. В таблице отображаются дата и время, пользователь, действие, наименование, заводской номер и подробности.</p>
+                    <ul>
+                        <li>Операции с приборами: создание, изменение, перемещение в корзину и восстановление.</li>
+                        <li>Операции с документами: создание, изменение и удаление документа, добавление прибора в документ и исключение прибора из документа.</li>
+                        <li>Административные операции с учётными записями также отражаются в журнале, если соответствующее событие предусмотрено серверной версией приложения.</li>
+                    </ul>
+                    <p>Кнопка «Обновить» загружает последние записи журнала. «Показать все» запрашивает полный доступный журнал. Для сохранения журнала на компьютер используйте «Экспорт журнала CSV».</p>
+                </section>
+
+                <section id="help-trash" class="help-section">
+                    <h2>7. Раздел «Корзина»</h2>
+                    <p>При удалении прибора из основного списка он перемещается в корзину. В корзине отображаются идентификатор, фотография, наименование, заводской номер и позиция.</p>
+                    <ul>
+                        <li>Нажмите «Обновить», чтобы повторно загрузить содержимое корзины.</li>
+                        <li>Нажмите «Восстановить» напротив нужного прибора и подтвердите действие.</li>
+                        <li>После восстановления прибор снова появляется в разделе «Все приборы».</li>
+                    </ul>
+                    <p>В текущем интерфейсе предусмотрено восстановление записей; отдельной команды окончательного удаления из корзины нет.</p>
+                </section>
+
+                <section id="help-export" class="help-section">
+                    <h2>8. Экспорт и печать</h2>
+                    <ul>
+                        <li><b>Экспорт CSV</b> в разделе «Все приборы» — выгрузка перечня приборов для дальнейшей обработки в табличном редакторе.</li>
+                        <li><b>Экспорт журнала CSV</b> — выгрузка записей журнала.</li>
+                        <li><b>Печать</b> в карточке прибора — печатная форма отдельного прибора. В диалоге печати браузера можно выбрать принтер или сохранение в PDF.</li>
+                        <li><b>Печать инструкции</b> — печатная версия этой страницы.</li>
+                    </ul>
+                </section>
+
+                <section id="help-rules" class="help-section">
+                    <h2>9. Рекомендации по ведению данных</h2>
+                    <ul>
+                        <li>Используйте единообразное написание наименований и позиций.</li>
+                        <li>Проверяйте заводской номер перед созданием новой записи, чтобы не плодить дубликаты.</li>
+                        <li>Своевременно заполняйте даты последней и следующей поверки.</li>
+                        <li>Добавляйте фотографии, если они помогают однозначно идентифицировать прибор.</li>
+                        <li>Перед массовыми изменениями или обновлением приложения создавайте резервную копию файла базы данных.</li>
+                        <li>Не передавайте пароль другим сотрудникам. Для каждого сотрудника администратор должен создать отдельную учётную запись.</li>
+                    </ul>
+                    <p class="help-footnote">Инструкция описывает функции, доступные в текущем интерфейсе приложения. Набор доступных действий зависит от роли вошедшего пользователя.</p>
+                </section>
+            </div>
+        </div>
+    </section>
+
     <section id="tab-users" class="tab-panel">
         <div class="users-page">
             <h1>Управление пользователями</h1>
@@ -210,39 +376,61 @@
             <button id="modalCloseBtn" class="btn-link" aria-label="Закрыть">✕</button>
         </div>
 
-        <form id="deviceForm">
+        <form id="deviceForm" class="device-edit-form">
             <input type="hidden" id="fId">
             <input type="hidden" id="fVersion" value="0">
 
-            <label>Наименование
-                <input id="fName" type="text" list="listNames" autocomplete="off" required>
-                <datalist id="listNames"></datalist>
-            </label>
-
-            <label>Заводской номер
-                <input id="fSerial" type="text" placeholder="Например, 123456" autocomplete="off">
-            </label>
-
-            <label>Позиция
-                <input id="fLocation" type="text" list="listLocations" autocomplete="off">
-                <datalist id="listLocations"></datalist>
-            </label>
-
-            <label>Дата последней поверки
-                <input id="fLast" type="date">
-            </label>
-            <label>Дата следующей поверки
-                <input id="fNext" type="date">
-            </label>
-
-            <!-- Блок работы с фото -->
-            <div class="photo-row">
-                <div id="photoPreview" class="photo-preview">Нет фото</div>
-                <div class="photo-controls">
-                    <input id="fPhoto" type="file" accept="image/*" capture="environment">
-                    <button type="button" id="removePhotoBtn" class="btn-link" hidden>Удалить фото</button>
+            <fieldset class="form-section">
+                <legend>Идентификация прибора</legend>
+                <div class="form-grid">
+                    <label>Заводской номер<input id="fSerial" type="text" autocomplete="off"></label>
+                    <label>Позиция<input id="fLocation" type="text" list="listLocations" autocomplete="off"><datalist id="listLocations"></datalist></label>
+                    <label class="span-2">Наименование позиции<input id="fName" type="text" list="listNames" autocomplete="off" required><datalist id="listNames"></datalist></label>
+                    <label>Тип датчика<input id="fSensorType" type="text"></label>
+                    <label>Единица измерения<input id="fUnit" type="text"></label>
                 </div>
-            </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+                <legend>Метрологические характеристики</legend>
+                <div class="form-grid">
+                    <label>Минимум шкалы<input id="fScaleMin" type="text" inputmode="decimal"></label>
+                    <label>Максимум шкалы<input id="fScaleMax" type="text" inputmode="decimal"></label>
+                    <label>П/К<select id="fCategory"><option value="">— не выбрано —</option><option value="П">П</option><option value="К">К</option></select></label>
+                    <label>МПИ, мес.<input id="fMpi" type="text" inputmode="numeric"></label>
+                    <label>Класс точности<input id="fAccuracyClass" type="text"></label>
+                    <label>Красная черта<input id="fRedLine" type="text"></label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+                <legend>Поверка и состояние</legend>
+                <div class="form-grid">
+                    <label>Дата поверки<input id="fLast" type="date"></label>
+                    <label>Дата следующей поверки<input id="fNext" type="date"></label>
+                    <label>Списание<input id="fWriteOff" type="date"></label>
+                    <label>Отложенная поверка<input id="fDeferredVerification" type="text" placeholder="Дата или примечание"></label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+                <legend>Учётные сведения</legend>
+                <div class="form-grid">
+                    <label>Строка<input id="fRowNumber" type="text"></label>
+                    <label>Группа<input id="fGroupName" type="text"></label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+                <legend>Фотография</legend>
+                <div class="photo-row">
+                    <div id="photoPreview" class="photo-preview">Нет фото</div>
+                    <div class="photo-controls">
+                        <input id="fPhoto" type="file" accept="image/*" capture="environment">
+                        <button type="button" id="removePhotoBtn" class="btn-link" hidden>Удалить фото</button>
+                    </div>
+                </div>
+            </fieldset>
 
             <div class="modal-actions">
                 <button type="button" id="cancelBtn" class="btn">Отмена</button>
@@ -265,28 +453,25 @@
                 <div id="viewPhotoEmpty" class="photo-placeholder-large">Нет фото</div>
             </div>
 
-            <div class="view-details">
-                <div class="detail-row">
-                    <span class="detail-label">Заводской номер</span>
-                    <span class="detail-value" id="viewSerial">—</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Позиция</span>
-                    <span class="detail-value" id="viewLocation">—</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Последняя поверка</span>
-                    <span class="detail-value" id="viewLast">—</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Следующая поверка</span>
-                    <span class="detail-value" id="viewNext">—</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Статус</span>
-                    <span class="detail-value" id="viewStatus">—</span>
-                </div>
+            <div class="view-details" id="viewDetails" aria-live="polite">
+                <!-- Поля карточки формируются из данных прибора в app.js -->
             </div>
+            <aside class="view-history" id="viewHistory">
+                <div class="history-heading"><h3>История движения</h3><button type="button" id="addMovementBtn" class="btn-primary">+ Операция</button></div>
+                <div id="movementCurrentState" class="movement-current-state">Текущее состояние: не указано</div>
+                <form id="movementForm" class="movement-form" hidden>
+                    <label>Операция<select id="movementType" required>
+                        <option value="">Выберите операцию</option><option>Снят с позиции</option><option>Установлен</option><option>Передан на поверку</option><option>Возвращён после поверки</option><option>Передан на калибровку</option><option>Возвращён после калибровки</option><option>Передан в ремонт</option><option>Возвращён из ремонта</option><option>Передан на склад</option><option>Списан</option><option>Другое</option>
+                    </select></label>
+                    <label>Дата<input id="movementDate" type="date" required></label>
+                    <label>Откуда<input id="movementFrom" type="text" maxlength="250" placeholder="Старая позиция / место"></label>
+                    <label>Куда<input id="movementTo" type="text" maxlength="250" placeholder="Новая позиция / место"></label>
+                    <label>Примечание<textarea id="movementNote" rows="2" maxlength="1000"></textarea></label>
+                    <div class="movement-form-actions"><button type="button" id="cancelMovementBtn" class="btn">Отмена</button><button type="submit" class="btn-primary">Сохранить</button></div>
+                </form>
+                <div class="history-section"><h4>Физические перемещения</h4><div id="physicalHistory" class="history-list"><span class="muted">Загрузка…</span></div></div>
+                <div class="history-section"><h4>Документы и ведомости</h4><div id="documentHistory" class="history-list"><span class="muted">Загрузка…</span></div></div>
+            </aside>
         </div>
 
         <div class="view-actions">

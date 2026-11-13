@@ -46,6 +46,8 @@ body {
 }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+/* Скрытые пункты меню должны оставаться скрытыми даже при display у .tab. */
+.tab[hidden], .tab-panel[hidden] { display: none !important; }
 .badge {
     display: inline-block;
     background: var(--err);
@@ -109,6 +111,42 @@ main { padding: 16px 20px 40px; }
 .btn-danger:active { filter: brightness(0.9); }
 .btn-danger:focus-visible { outline: 2px solid var(--err); outline-offset: 2px; }
 
+.devices-table-scroll {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: scroll;
+    overflow-y: visible;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    scrollbar-gutter: stable;
+}
+table.instruments-table {
+    display: table;
+    width: max-content;
+    min-width: 2100px;
+    table-layout: auto;
+    border-collapse: collapse;
+    background: var(--bg-2);
+    border-radius: 0;
+}
+table.instruments-table th, table.instruments-table td {
+    white-space: nowrap;
+    min-width: 90px;
+    font-size: 12px;
+    padding: 9px 11px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+}
+table.instruments-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-3);
+}
+table.instruments-table tbody tr { cursor: pointer; }
+table.instruments-table tbody tr:hover { background: rgba(59,130,246,.12); }
+
 table.devices {
     width: 100%;
     border-collapse: collapse;
@@ -171,7 +209,31 @@ table.devices tbody tr {
     width: min(560px, 90vw); max-height: 90vh; overflow-y: auto;
     border: 1px solid var(--border);
 }
+#modal .modal-content { width: min(900px, 94vw); max-height: 92vh; }
 .modal-content h2 { margin: 0 0 14px; font-size: 18px; }
+.device-edit-form { display: flex; flex-direction: column; gap: 12px; }
+.form-section { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.form-section legend { padding: 0 7px; color: var(--accent); font-size: 13px; font-weight: 600; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.form-grid label { min-width: 0; margin: 0 !important; }
+.form-grid .span-2 { grid-column: span 2; }
+.modal-content .form-grid input[type=text],
+.modal-content .form-grid input[type=date],
+.modal-content .form-grid input[type=password],
+.modal-content .form-grid select,
+.modal-content .form-grid textarea {
+    display: block; width: 100%; margin-top: 4px; padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; font-size: 14px;
+}
+.modal-content .form-grid textarea { resize: vertical; min-height: 68px; }
+.device-edit-form .photo-row { margin: 0; }
+@media (max-width: 620px) {
+    .form-grid { grid-template-columns: 1fr; }
+    .form-grid .span-2 { grid-column: auto; }
+    .modal-content { width: min(560px, 96vw); padding: 14px; }
+}
+
 .modal-content label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--text-dim); }
 .modal-content input[type=text],
 .modal-content input[type=date],
@@ -492,3 +554,116 @@ body.read-only #tableDocumentDevices button, body.read-only #tableTrash button {
 .device-search-empty { padding: 12px; }
 #documentDeviceSelection { margin-top: 8px; }
 .btn-small { padding: 4px 9px; font-size: 12px; }
+
+
+/* Справочная страница */
+.tab-help { margin-left: auto; }
+.help-page { max-width: 1440px; margin: 0 auto; }
+.help-header { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin: 4px 0 22px; }
+.help-header h1 { margin:5px 0 8px; font-size:26px; line-height:1.25; }
+.help-header p { margin:0; }
+.help-kicker { color:var(--accent); font-size:11px; font-weight:700; letter-spacing:.12em; }
+.help-layout { display:grid; grid-template-columns:230px minmax(0,1fr); gap:22px; align-items:start; }
+.help-toc { position:sticky; top:14px; display:flex; flex-direction:column; gap:5px; padding:16px; background:var(--bg-2); border:1px solid var(--border); border-radius:9px; }
+.help-toc strong { margin-bottom:7px; }
+.help-toc a { color:var(--text-dim); text-decoration:none; padding:5px 0; line-height:1.35; }
+.help-toc a:hover { color:var(--accent); }
+.help-content { min-width:0; }
+.help-section { scroll-margin-top:16px; padding:20px 22px; margin-bottom:14px; background:var(--bg-2); border:1px solid var(--border); border-radius:9px; }
+.help-section h2 { margin:0 0 13px; font-size:19px; }
+.help-section h3 { margin:18px 0 8px; font-size:15px; }
+.help-section p { line-height:1.65; color:var(--text); }
+.help-section li { margin:7px 0; line-height:1.55; }
+.help-section ul, .help-section ol { padding-left:23px; }
+.help-note { padding:12px 14px; margin:14px 0; border-left:3px solid var(--accent); border-radius:4px; background:var(--bg); line-height:1.55; }
+.help-role-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:12px 0; }
+.help-role-grid > div { padding:13px; background:var(--bg); border:1px solid var(--border); border-radius:7px; }
+.help-role-grid p { margin:7px 0 0; color:var(--text-dim); font-size:13px; }
+.help-footnote { color:var(--text-dim) !important; font-size:12px; border-top:1px solid var(--border); padding-top:12px; }
+@media (max-width:900px) { .help-layout { grid-template-columns:1fr; } .help-toc { position:static; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } .help-toc strong { grid-column:1/-1; } .help-role-grid { grid-template-columns:1fr; } }
+@media (max-width:700px) { .tab-help { margin-left:0; } .help-header { flex-direction:column; } .help-header h1 { font-size:22px; } .help-section { padding:16px; } .help-toc { grid-template-columns:1fr; } }
+@media print {
+  body { background:#fff !important; color:#111 !important; }
+  .topbar, .tabs, .help-toc, .help-header button { display:none !important; }
+  main { padding:0 !important; }
+  .tab-panel { display:none !important; }
+  #tab-help { display:block !important; }
+  .help-layout { display:block; }
+  .help-section { break-inside:avoid; background:#fff !important; color:#111 !important; border:1px solid #bbb; }
+  .help-section p, .help-section li, .help-role-grid p { color:#111 !important; }
+  .help-note, .help-role-grid > div { background:#fff !important; }
+}
+
+/* Полная карточка прибора: все поля таблицы и вертикальная прокрутка */
+.view-content {
+    width: min(1100px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.view-header { flex: 0 0 auto; }
+.view-body {
+    min-height: 0;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    align-items: flex-start;
+}
+.view-details {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 0 24px;
+    min-width: 300px;
+}
+.detail-row {
+    min-width: 0;
+    justify-content: flex-start;
+    flex-direction: column;
+    gap: 5px;
+    padding: 9px 0;
+}
+.detail-label { font-size: 12px; }
+.detail-value {
+    width: 100%;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.view-actions { flex: 0 0 auto; }
+@media (max-width: 700px) {
+    .view-content { width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
+    .view-body { padding: 14px; }
+    .view-photo { flex-basis: 100%; min-height: 160px; }
+    .view-details { grid-template-columns: 1fr; min-width: 0; }
+    .view-actions { padding: 12px; flex-wrap: wrap; }
+    .view-actions__left, .view-actions__right { flex-wrap: wrap; }
+}
+
+/* Правая панель истории движения прибора */
+.view-content { width: min(1500px, calc(100vw - 32px)); }
+.view-body { display:grid; grid-template-columns:minmax(0,1fr) minmax(300px,390px); gap:22px; align-items:start; }
+.view-photo { grid-column:1; grid-row:1; }
+.view-details { grid-column:1; grid-row:2; }
+.view-body:not(.no-photo) .view-details { grid-column:1; }
+.view-body.no-photo .view-details { grid-column:1; grid-row:1; width:auto; }
+.view-history { grid-column:2; grid-row:1 / span 2; min-width:0; border-left:1px solid var(--border); padding-left:18px; }
+.history-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:14px; }
+.history-heading h3,.history-section h4 { margin:0; font-size:15px; }
+.history-section { margin:16px 0 22px; }
+.history-section h4 { margin-bottom:10px; color:var(--text-dim); }
+.history-list { display:flex; flex-direction:column; gap:10px; }
+.history-item { border:1px solid var(--border); border-radius:8px; padding:10px; background:var(--bg); }
+.history-item strong { display:block; font-size:13px; margin-bottom:4px; }
+.history-item .history-date { font-size:12px; color:var(--text-dim); }
+.history-item p { margin:5px 0 0; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.movement-form { border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:14px; background:var(--bg-3); }
+.movement-form label { display:block; font-size:12px; color:var(--text-dim); margin:8px 0; }
+.movement-form input,.movement-form select,.movement-form textarea { width:100%; margin-top:4px; }
+.movement-form-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+@media(max-width:900px) { .view-body { grid-template-columns:1fr; } .view-photo,.view-details,.view-body.no-photo .view-details { grid-column:1; grid-row:auto; } .view-history { grid-column:1; grid-row:auto; border-left:0; border-top:1px solid var(--border); padding:16px 0 0; } }
+
+.movement-current-state { border-radius:7px; padding:9px 10px; background:var(--bg-3); color:var(--text); font-size:12px; margin-bottom:12px; }
+
+/* Кнопка редактирования карточки прибора доступна всем авторизованным
+   пользователям с правом изменения; гостевой режим остаётся только для просмотра. */
+body:not(.read-only) #viewEditBtn { display: inline-flex !important; }

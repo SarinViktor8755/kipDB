@@ -32,7 +32,7 @@ public class TestData {
     private static final Random RND = new Random();
 
     public static void seedIfEmpty() throws SQLException {
-        try (Connection c = DriverManager.getConnection("jdbc:sqlite:kip.db")) {
+        try (Connection c = Db.openConnection()) {
             try (Statement s = c.createStatement();
                  ResultSet rs = s.executeQuery("SELECT COUNT(*) FROM devices")) {
                 rs.next();

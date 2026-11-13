@@ -148,45 +148,50 @@ function render() {
     renderAllTab();
 }
 
+function formatTableDate(value) {
+    if (!value) return '—';
+    const s = String(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) { const [y,m,d] = s.split('-'); return `${d}.${m}.${y}`; }
+    return s;
+}
+
+function formatScale(device) {
+    const min = device.scaleMin == null ? '' : String(device.scaleMin).trim();
+    const max = device.scaleMax == null ? '' : String(device.scaleMax).trim();
+    const unit = device.unit == null ? '' : String(device.unit).trim();
+    if (!min && !max && !unit) return '—';
+    if (min && max) return `${min} ÷ ${max}${unit ? ' ' + unit : ''}`;
+    return [min, max, unit].filter(Boolean).join(' ');
+}
+
 function renderAllTab() {
     const q = ($('#searchAll').value || '').toLowerCase().trim();
     const f = $('#statusFilter').value;
     const sort = $('#sortFilter').value;
-
     let rows = state.devices.filter(d => {
-        if (q && !((d.name || '').toLowerCase().includes(q) ||
-                   (d.location || '').toLowerCase().includes(q) ||
-                   (d.serialNumber || '').toLowerCase().includes(q))) return false;
+        const haystack = [d.name,d.location,d.serialNumber,d.sensorType,d.unit,d.category,d.groupName,d.positionName,d.redLine].join(' ').toLowerCase();
+        if (q && !haystack.includes(q)) return false;
         if (f && statusOf(d) !== f) return false;
         return true;
     });
-
-    rows.sort((a, b) => {
-        if (sort === 'name_asc') {
-            return (a.name || '').localeCompare(b.name || '');
-        } else if (sort === 'name_desc') {
-            return (b.name || '').localeCompare(a.name || '');
-        } else if (sort === 'date_new') {
-            return (b.createdAt || '').localeCompare(a.createdAt || '');
-        } else if (sort === 'date_old') {
-            return (a.createdAt || '').localeCompare(b.createdAt || '');
-        }
+    rows.sort((a,b) => {
+        if (sort === 'name_asc') return (a.positionName || a.name || '').localeCompare(b.positionName || b.name || '');
+        if (sort === 'name_desc') return (b.positionName || b.name || '').localeCompare(a.positionName || a.name || '');
+        if (sort === 'date_new') return (b.createdAt || '').localeCompare(a.createdAt || '');
+        if (sort === 'date_old') return (a.createdAt || '').localeCompare(b.createdAt || '');
         return 0;
     });
-
-    const tbody = $('#tableAll tbody');
-    tbody.innerHTML = rows.map(d => {
-        const s = statusOf(d);
-        return `<tr data-id="${d.id}">
-            <td class="photo-cell">${photoHtml(d)}</td>
-            <td>${escapeHtml(d.name)}</td>
-            <td>${escapeHtml(d.serialNumber || '—')}</td>
-            <td>${escapeHtml(d.location)}</td>
-            <td>${formatDate(d.lastVerification)}</td>
-            <td>${formatDate(d.nextVerification)}</td>
-            <td>${statusBadge(s)}</td>
-        </tr>`;
-    }).join('');
+    $('#tableAll tbody').innerHTML = rows.map(d => `<tr data-id="${d.id}">
+        <td>${escapeHtml(d.serialNumber || '—')}</td><td>${escapeHtml(d.location || '—')}</td>
+        <td>${escapeHtml(d.sensorType || '—')}</td>
+        <td>${escapeHtml(formatScale(d))}</td>
+        <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
+        <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
+        <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
+        <td>${formatTableDate(d.writeOff)}</td><td>${escapeHtml(d.deferredVerification || '—')}</td>
+        <td>${escapeHtml(d.location || '—')}</td><td>${escapeHtml(d.rowNumber || '—')}</td>
+        <td>${escapeHtml(d.groupName || '—')}</td><td>${escapeHtml(d.positionName || d.name || '—')}</td>
+    </tr>`).join('');
     $('#emptyAll').hidden = rows.length !== 0;
 }
 
@@ -250,10 +255,40 @@ function switchTab(tabName) {
     }
 }
 
-// Слушаем изменения хэша (кнопки Назад/Вперёд)
-window.addEventListener('hashchange', () => {
-    const hash = window.location.hash.replace('#', '') || 'all';
-    switchTab(hash);
+// Разделы инструкции используют собственные якоря #help-*. Они не должны
+// попадать в общий обработчик вкладок приложения.
+function handleAppRoute() {
+    const hash = decodeURIComponent(window.location.hash.replace(/^#/, '')) || 'all';
+    const helpTarget = document.getElementById(hash);
+
+    if (helpTarget && helpTarget.classList.contains('help-section')) {
+        switchTab('help');
+        requestAnimationFrame(() => helpTarget.scrollIntoView({ behavior: 'auto', block: 'start' }));
+        return;
+    }
+
+    const allowedTabs = ['all', 'documents', 'audit', 'trash', 'help', 'users'];
+    switchTab(allowedTabs.includes(hash) ? hash : 'all');
+}
+
+// Слушаем изменения хэша (кнопки Назад/Вперёд и прямые ссылки).
+window.addEventListener('hashchange', handleAppRoute);
+
+// Перехватываем содержание инструкции: прокручиваем к разделу без изменения
+// URL-хэша, чтобы маршрутизатор вкладок не воспринимал якорь как вкладку.
+document.addEventListener('click', (event) => {
+    const link = event.target.closest('.help-toc a[href^="#help-"]');
+    if (!link) return;
+
+    event.preventDefault();
+    const targetId = decodeURIComponent(link.getAttribute('href').slice(1));
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    if (state.currentTab !== 'help') {
+        switchTab('help');
+    }
+    requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 });
 
 // Обработчик кликов по меню
@@ -271,11 +306,9 @@ $all('.tab').forEach(btn => {
     });
 });
 
-// При загрузке страницы определяем вкладку по URL
-document.addEventListener('DOMContentLoaded', () => {
-    const hash = window.location.hash.replace('#', '') || 'all';
-    switchTab(hash);
-});
+// При загрузке страницы определяем вкладку по URL. Если адрес содержит
+// якорь раздела инструкции, открываем инструкцию и прокручиваем к нему.
+document.addEventListener('DOMContentLoaded', handleAppRoute);
 
 // ==========================================
 // АВТОРИЗАЦИЯ И РОЛИ
@@ -588,21 +621,37 @@ $('#refreshAuditBtn').addEventListener('click', () => renderAuditTab(200));
 $('#showAllAuditBtn').addEventListener('click', () => renderAuditTab(999999));
 $('#refreshTrashBtn').addEventListener('click', renderTrashTab);
 
+function setFormValue(id, value) {
+    const el = $('#' + id);
+    if (el) el.value = value == null ? '' : String(value);
+}
+
 function openModal(device) {
     $('#modalTitle').textContent = device ? 'Редактировать прибор' : 'Новый прибор';
-    $('#fId').value = device ? device.id : '';
-    $('#fSerial').value = device ? (device.serialNumber || '') : '';
-    $('#fName').value = device ? (device.name || '') : '';
-    $('#fLocation').value = device ? (device.location || '') : '';
-    $('#fLast').value = device ? (device.lastVerification || '') : '';
-    $('#fNext').value = device ? (device.nextVerification || '') : '';
-    $('#fVersion').value = device ? (device.version || 0) : 0;
+    setFormValue('fId', device ? device.id : '');
+    setFormValue('fVersion', device ? (device.version || 0) : 0);
+    setFormValue('fSerial', device?.serialNumber);
+    setFormValue('fName', device?.positionName || device?.name);
+    setFormValue('fLocation', device?.location);
+    setFormValue('fSensorType', device?.sensorType);
+    setFormValue('fUnit', device?.unit);
+    setFormValue('fScaleMin', device?.scaleMin);
+    setFormValue('fScaleMax', device?.scaleMax);
+    setFormValue('fCategory', device?.category);
+    setFormValue('fLast', device?.lastVerification);
+    setFormValue('fMpi', device?.mpi);
+    setFormValue('fNext', device?.nextVerification);
+    setFormValue('fAccuracyClass', device?.accuracyClass);
+    setFormValue('fRedLine', device?.redLine);
+    setFormValue('fWriteOff', device?.writeOff);
+    setFormValue('fDeferredVerification', device?.deferredVerification);
+    setFormValue('fRowNumber', device?.rowNumber);
+    setFormValue('fGroupName', device?.groupName);
 
     const prev = $('#photoPreview');
     const removeBtn = $('#removePhotoBtn');
     const hasPhoto = device && (device.photoPath || device.photoThumbPath) &&
                      device.photoPath !== 'null' && device.photoPath !== 'undefined';
-
     if (hasPhoto) {
         prev.innerHTML = '<img src="/' + (device.photoThumbPath || device.photoPath) + '" alt="">';
         removeBtn.hidden = false;
@@ -610,9 +659,32 @@ function openModal(device) {
         prev.innerHTML = 'Нет фото';
         removeBtn.hidden = true;
     }
-
     $('#fPhoto').value = '';
     $('#modal').hidden = false;
+}
+
+function collectDeviceFormData() {
+    return {
+        serialNumber: $('#fSerial').value.trim(),
+        name: $('#fName').value.trim(),
+        positionName: $('#fName').value.trim(),
+        location: $('#fLocation').value.trim(),
+        sensorType: $('#fSensorType').value.trim(),
+        unit: $('#fUnit').value.trim(),
+        scaleMin: $('#fScaleMin').value.trim(),
+        scaleMax: $('#fScaleMax').value.trim(),
+        category: $('#fCategory').value,
+        lastVerification: $('#fLast').value || '',
+        mpi: $('#fMpi').value.trim(),
+        nextVerification: $('#fNext').value || '',
+        accuracyClass: $('#fAccuracyClass').value.trim(),
+        redLine: $('#fRedLine').value.trim(),
+        writeOff: $('#fWriteOff').value || '',
+        deferredVerification: $('#fDeferredVerification').value.trim(),
+        rowNumber: $('#fRowNumber').value.trim(),
+        groupName: $('#fGroupName').value.trim(),
+        version: parseInt($('#fVersion').value, 10) || 0
+    };
 }
 
 function closeModal() { $('#modal').hidden = true; }
@@ -630,14 +702,9 @@ $('#removePhotoBtn').addEventListener('click', async (e) => {
 
     try {
         const body = {
-            serialNumber: $('#fSerial').value.trim(),
-            name: $('#fName').value.trim(),
-            location: $('#fLocation').value.trim(),
-            lastVerification: $('#fLast').value || '',
-            nextVerification: $('#fNext').value || '',
+            ...collectDeviceFormData(),
             photoPath: null,
-            photoThumbPath: null,
-            version: parseInt($('#fVersion').value, 10) || 0
+            photoThumbPath: null
         };
 
         const r = await fetch('/api/devices/' + id, {
@@ -670,14 +737,7 @@ $('#removePhotoBtn').addEventListener('click', async (e) => {
 $('#deviceForm').addEventListener('submit', async e => {
     e.preventDefault();
     const id = $('#fId').value;
-    const body = {
-        serialNumber: $('#fSerial').value.trim(),
-        name: $('#fName').value.trim(),
-        location: $('#fLocation').value.trim(),
-        lastVerification: $('#fLast').value || '',
-        nextVerification: $('#fNext').value || '',
-        version: parseInt($('#fVersion').value, 10) || 0
-    };
+    const body = collectDeviceFormData();
     const url = id ? '/api/devices/' + id : '/api/devices';
     const method = id ? 'PUT' : 'POST';
     const r = await fetch(url, {
@@ -730,20 +790,48 @@ $('#deviceForm').addEventListener('submit', async e => {
 
 let currentViewDevice = null;
 
+function formatFullDate(dateStr) {
+    if (!dateStr || dateStr === '—' || dateStr === 'null') return '—';
+    const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : String(dateStr);
+}
+
 function openViewModal(device) {
     currentViewDevice = device;
-    $('#viewName').textContent = device.name || 'Без названия';
-    $('#viewSerial').textContent = device.serialNumber || '—';
-    $('#viewLocation').textContent = device.location || '—';
-    $('#viewLast').textContent = formatDate(device.lastVerification);
-    $('#viewNext').textContent = formatDate(device.nextVerification);
+    $('#viewName').textContent = device.positionName || device.name || 'Без названия';
 
-    const s = statusOf(device);
-    $('#viewStatus').innerHTML = statusBadge(s);
+    const status = statusOf(device);
+    const fields = [
+        ['Заводской номер', device.serialNumber],
+        ['Позиция', device.location],
+        ['Тип датчика', device.sensorType],
+        ['Единица измерения', device.unit],
+        ['Минимум шкалы', device.scaleMin],
+        ['Максимум шкалы', device.scaleMax],
+        ['П/К', device.category],
+        ['Дата поверки', formatFullDate(device.lastVerification)],
+        ['МПИ', device.mpi],
+        ['Дата следующей поверки', formatFullDate(device.nextVerification)],
+        ['Класс точности', device.accuracyClass],
+        ['Красная черта', device.redLine],
+        ['Списание', device.writeOff],
+        ['Отложенная поверка', device.deferredVerification],
+        ['Строка', device.rowNumber],
+        ['Группа', device.groupName],
+        ['Наименование позиции', device.positionName || device.name],
+        ['Статус поверки', statusLabel(status)]
+    ];
+
+    const details = $('#viewDetails');
+    details.innerHTML = fields.map(([label, value]) => `
+        <div class="detail-row">
+            <span class="detail-label">${escapeHtml(label)}</span>
+            <span class="detail-value">${escapeHtml(value == null || String(value).trim() === '' ? '—' : value)}</span>
+        </div>
+    `).join('');
 
     const photo = $('#viewPhoto');
     const body = document.querySelector('.view-body');
-
     const hasPhoto = device.photoPath && device.photoPath !== 'null' && String(device.photoPath).trim() !== '';
 
     if (hasPhoto) {
@@ -757,7 +845,44 @@ function openViewModal(device) {
     }
 
     $('#viewModal').hidden = false;
+    loadDeviceHistory(device.id).catch(err => showToast('Не удалось загрузить историю', err.message, 'error'));
 }
+async function loadDeviceHistory(deviceId) {
+    const r = await fetch('/api/devices/' + deviceId + '/movements');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const movements = data.movements || [];
+    const docs = data.documents || [];
+    const latest = movements[0];
+    $('#movementCurrentState').textContent = latest ? `Текущее состояние: ${latest.eventType} · ${formatFullDate(latest.eventDate)}` : 'Текущее состояние: не указано';
+    $('#physicalHistory').innerHTML = movements.length ? movements.map(m => `
+        <div class="history-item"><strong>${escapeHtml(m.eventType)}</strong><span class="history-date">${formatFullDate(m.eventDate)} · ${escapeHtml(m.createdBy || '')}</span>
+        ${m.fromPlace ? `<p><b>Откуда:</b> ${escapeHtml(m.fromPlace)}</p>` : ''}${m.toPlace ? `<p><b>Куда:</b> ${escapeHtml(m.toPlace)}</p>` : ''}${m.note ? `<p>${escapeHtml(m.note)}</p>` : ''}</div>`).join('') : '<span class="muted">Перемещений пока нет</span>';
+    $('#documentHistory').innerHTML = docs.length ? docs.map(d => `
+        <div class="history-item"><strong>${escapeHtml(d.eventType)}</strong><span class="history-date">${formatFullDate(d.eventDate)} · ${escapeHtml(d.createdBy || '')}</span>
+        <p>${escapeHtml(d.documentTitle || 'Документ')}${d.documentNumber ? ' № ' + escapeHtml(d.documentNumber) : ''}</p></div>`).join('') : '<span class="muted">История документов пока пуста</span>';
+}
+
+$('#addMovementBtn').addEventListener('click', () => {
+    $('#movementForm').hidden = false;
+    $('#movementDate').value = today();
+    $('#movementType').focus();
+});
+$('#cancelMovementBtn').addEventListener('click', () => { $('#movementForm').hidden = true; $('#movementForm').reset(); });
+$('#movementForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!currentViewDevice) return;
+    const payload = { eventDate:$('#movementDate').value, eventType:$('#movementType').value, fromPlace:$('#movementFrom').value.trim(), toPlace:$('#movementTo').value.trim(), note:$('#movementNote').value.trim() };
+    try {
+        const r = await fetch('/api/devices/' + currentViewDevice.id + '/movements', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const result = await r.json();
+        if (!r.ok) throw new Error(result.error || ('HTTP ' + r.status));
+        $('#movementForm').hidden = true; $('#movementForm').reset();
+        await loadDeviceHistory(currentViewDevice.id);
+        if (payload.eventType === 'Установлен' && payload.toPlace) { currentViewDevice.location = payload.toPlace; await loadAll(); }
+        showToast('Операция сохранена', payload.eventType, 'ok');
+    } catch(err) { showToast('Ошибка сохранения операции', err.message, 'error'); }
+});
 
 function closeViewModal() {
     $('#viewModal').hidden = true;

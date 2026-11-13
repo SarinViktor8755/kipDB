@@ -11,6 +11,7 @@ public class Device {
     public String photoThumbPath;
     public int version = 0;
     public String createdAt;
+    public String detailsJson = "{}";
 
     public Device() {
     }
