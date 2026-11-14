@@ -11,7 +11,7 @@ import java.util.Set;
 
 public class GenerateTestDevices {
 
-    private static final int DEVICES_COUNT = 7500;
+    private static final int DEVICES_COUNT = 3000;
 
     private static final SecureRandom RANDOM = new SecureRandom();
 

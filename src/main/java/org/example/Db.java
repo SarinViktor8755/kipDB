@@ -211,9 +211,9 @@ public class Db {
                 }
             }
         }
-        importSampleDevicesIfEmpty();
-        migrateLegacyMovementHistory();
-        seedCurrentDocumentHistory();
+        //importSampleDevicesIfEmpty();
+        //    migrateLegacyMovementHistory();
+        //seedCurrentDocumentHistory();
     }
 
     // Переносим старый текстовый столбец «Движение» в отдельные события, сохраняя исходные формулировки.

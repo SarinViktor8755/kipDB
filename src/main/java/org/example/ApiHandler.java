@@ -22,9 +22,10 @@ import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.Iterator;
 import java.util.List;
-import java.util.UUID;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.GZIPOutputStream;
 
 public class ApiHandler implements HttpHandler {
 
@@ -300,7 +301,8 @@ public class ApiHandler implements HttpHandler {
         List<Device> devices = Db.getDeletedDevices();
         JSONArray arr = new JSONArray();
         for (Device d : devices) arr.put(toJson(d));
-        sendJson(ex, 200, arr);
+        // Корзина — тоже потенциально большой массив, сжимаем.
+        sendJsonGzip(ex, 200, arr);
     }
 
     private void restoreDevice(HttpExchange ex, long id) throws IOException, SQLException {
@@ -323,6 +325,11 @@ public class ApiHandler implements HttpHandler {
         try (InputStream in = ex.getRequestBody()) {
             raw = readLimited(in, MAX_PHOTO_BYTES);
         }
+
+        if (raw != null) {
+            System.out.printf("[HTTP IN ] %s %s | Получено от клиента: %d байт (фото)%n", ex.getRequestMethod(), ex.getRequestURI().getPath(), raw.length);
+        }
+
         if (raw == null) { sendJson(ex, 413, new JSONObject().put("error", "file too large")); return; }
         if (raw.length == 0) { sendJson(ex, 400, new JSONObject().put("error", "empty body")); return; }
 
@@ -428,7 +435,8 @@ public class ApiHandler implements HttpHandler {
         List<Device> devices = Db.getAllDevices();
         JSONArray arr = new JSONArray();
         for (Device d : devices) arr.put(toJson(d));
-        sendJson(ex, 200, arr);
+        // Основной массив — самый большой ответ, сжимаем.
+        sendJsonGzip(ex, 200, arr);
     }
 
     private void getDevice(HttpExchange ex, long id) throws IOException, SQLException {
@@ -506,7 +514,8 @@ public class ApiHandler implements HttpHandler {
                     .put("name", r[4] == null ? "—" : r[4])
                     .put("serialNumber", r[5] == null ? "—" : r[5]));
         }
-        sendJson(ex, 200, arr);
+        // Вместо sendJson используем sendJsonGzip, так как журнал может быть большим
+        sendJsonGzip(ex, 200, arr);
     }
 
     private void stats(HttpExchange ex) throws IOException, SQLException {
@@ -569,6 +578,8 @@ public class ApiHandler implements HttpHandler {
         ex.getResponseHeaders().set("Cache-Control", "no-store");
         ex.sendResponseHeaders(200, bytes.length);
         try (OutputStream out = ex.getResponseBody()) { out.write(bytes); }
+
+        System.out.printf("[HTTP OUT] %s %s | Отправлено клиенту: %d байт (CSV)%n", ex.getRequestMethod(), ex.getRequestURI().getPath(), bytes.length);
     }
 
     private static JSONObject toJson(Device d) {
@@ -601,16 +612,76 @@ public class ApiHandler implements HttpHandler {
 
     private static JSONObject readJson(HttpExchange ex) throws IOException {
         try (InputStream in = ex.getRequestBody()) {
-            String body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            byte[] bytes = in.readAllBytes();
+            String body = new String(bytes, StandardCharsets.UTF_8);
+
+            // Логируем размер принятого JSON, если он не пустой (GET-запросы обычно пустые)
+            if (bytes.length > 0) {
+                System.out.printf("[HTTP IN ] %s %s | Получено от клиента: %d байт (JSON)%n", ex.getRequestMethod(), ex.getRequestURI().getPath(), bytes.length);
+            }
+
             return body.isEmpty() ? new JSONObject() : new JSONObject(body);
         }
     }
 
+    /** Обычный JSON-ответ без сжатия. */
     private static void sendJson(HttpExchange ex, int code, Object body) throws IOException {
         byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         ex.sendResponseHeaders(code, bytes.length);
         try (OutputStream out = ex.getResponseBody()) { out.write(bytes); }
+
+        System.out.printf("[HTTP OUT] %s %s | Отправлено: %d байт (без сжатия)%n", ex.getRequestMethod(), ex.getRequestURI().getPath(), bytes.length);
+    }
+
+    /**
+     * JSON-ответ с gzip, если клиент прислал Accept-Encoding: gzip.
+     * Используется для больших массивов (/api/devices, /api/devices/deleted, /api/audit).
+     */
+    private static void sendJsonGzip(HttpExchange ex, int code, Object body) throws IOException {
+        byte[] raw = body.toString().getBytes(StandardCharsets.UTF_8);
+        boolean gzip = acceptsGzip(ex) && raw.length >= 1024;
+        byte[] out = raw;
+        if (gzip) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(64, raw.length / 3));
+            try (GZIPOutputStream gz = new GZIPOutputStream(bos)) { gz.write(raw); }
+            out = bos.toByteArray();
+            ex.getResponseHeaders().set("Content-Encoding", "gzip");
+        }
+        ex.getResponseHeaders().set("Vary", "Accept-Encoding");
+        ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
+        ex.sendResponseHeaders(code, out.length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(out); }
+
+        if (gzip) {
+            long saved = raw.length - out.length;
+            double ratio = 100.0 - ((double) out.length / raw.length * 100.0);
+            System.out.printf("[HTTP OUT] %s %s | Исходный: %d байт | Отправлено (gzip): %d байт | Экономия: %d байт (%.1f%%)%n",
+                    ex.getRequestMethod(), ex.getRequestURI().getPath(), raw.length, out.length, saved, ratio);
+        } else {
+            System.out.printf("[HTTP OUT] %s %s | Отправлено: %d байт (без сжатия)%n", ex.getRequestMethod(), ex.getRequestURI().getPath(), out.length);
+        }
+    }
+
+    private static boolean acceptsGzip(HttpExchange ex) {
+        String header = ex.getRequestHeaders().getFirst("Accept-Encoding");
+        if (header == null) return false;
+        for (String part : header.split(",")) {
+            String enc = part.trim().toLowerCase();
+            int semi = enc.indexOf(';');
+            String name = semi >= 0 ? enc.substring(0, semi).trim() : enc;
+            if (name.equals("gzip") || name.equals("x-gzip")) {
+                if (semi >= 0) {
+                    String q = enc.substring(semi + 1).trim();
+                    if (q.startsWith("q=")) {
+                        try { if (Double.parseDouble(q.substring(2)) == 0d) return false; }
+                        catch (NumberFormatException ignored) { }
+                    }
+                }
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void methodNotAllowed(HttpExchange ex) throws IOException {

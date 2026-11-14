@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<div id="loadingBar" class="loading-bar"></div>
+
 <header class="topbar">
     <div class="brand">Приборы КИП</div>
     <div class="user user-session">
@@ -19,7 +21,6 @@
 </header>
 
 <nav class="tabs">
-    <!-- Добавил href для визуальной ссылки, но JS будет перехватывать клики -->
     <a href="#all" class="tab active" data-tab="all">Все приборы</a>
     <a href="#documents" class="tab" data-tab="documents">Документы</a>
     <a href="#audit" class="tab" data-tab="audit">Журнал</a>
@@ -30,35 +31,72 @@
 
 <main>
     <section id="tab-all" class="tab-panel active">
-        <div class="toolbar">
+        <div class="toolbar toolbar-all">
             <input id="searchAll" type="search" placeholder="Поиск по названию, зав. номеру или позиции…">
-            <select id="statusFilter">
-                <option value="">Все статусы</option>
-                <option value="overdue">Просроченные</option>
-                <option value="soon">Скоро</option>
-                <option value="ok">В норме</option>
-            </select>
-
-            <!-- СОРТИРОВКА -->
-            <select id="sortFilter" title="Сортировка">
-                <option value="name_asc">По названию (А-Я)</option>
-                <option value="name_desc">По названию (Я-А)</option>
-                <option value="date_new">Сначала новые</option>
-                <option value="date_old">Сначала старые</option>
-            </select>
-
+            <div class="toolbar-hidden" hidden>
+                <select id="statusFilter">
+                    <option value="">Все статусы</option>
+                    <option value="overdue">Просроченные</option>
+                    <option value="soon">Скоро</option>
+                    <option value="ok">В норме</option>
+                </select>
+                <select id="sortFilter" title="Сортировка">
+                    <option value="name_asc">По названию (А-Я)</option>
+                    <option value="name_desc">По названию (Я-А)</option>
+                    <option value="date_new">Сначала новые</option>
+                    <option value="date_old">Сначала старые</option>
+                </select>
+            </div>
             <button id="addBtn" class="btn-primary">+ Добавить прибор</button>
-            <a href="/api/export.csv" class="btn">Экспорт CSV</a>
+            <a href="/api/export.csv" class="btn btn-export">Экспорт CSV</a>
+            <button id="resetColumnFiltersBtn" class="btn" type="button" title="Сбросить фильтры по столбцам">✕ Сбросить фильтры</button>
         </div>
-        <div class="devices-table-scroll">
-        <table id="tableAll" class="devices instruments-table">
-            <thead><tr>
-                <th>Заводской номер</th><th>Позиция</th><th>Тип датчика</th><th>Шкала</th><th>П/К</th>
-                <th>Дата поверки</th><th>МПИ</th><th>Дата следующей поверки</th>
-                <th>Класс точности</th><th>Красная черта</th><th>Списание</th>
-                <th>Отложенная поверка</th><th>Движение</th><th>Строка</th><th>Группа</th><th>Наименование позиции</th>
-            </tr></thead><tbody></tbody>
-        </table>
+
+        <div class="devices-table-scroll table-loading-wrap" id="devicesTableWrap">
+            <div id="tableAllLoading" class="table-loading-overlay">
+                <div class="spinner"></div>
+            </div>
+            <table id="tableAll" class="devices instruments-table">
+                <thead>
+                <tr class="head-titles">
+                    <th>Заводской номер</th>
+                    <th>Позиция</th>
+                    <th>Тип датчика</th>
+                    <th>Шкала</th>
+                    <th>П/К</th>
+                    <th>Дата поверки</th>
+                    <th>МПИ</th>
+                    <th>Дата следующей поверки</th>
+                    <th>Класс точности</th>
+                    <th>Красная черта</th>
+                    <th>Списание</th>
+                    <th>Отложенная поверка</th>
+                    <th>Движение</th>
+                    <th>Строка</th>
+                    <th>Группа</th>
+                    <th>Наименование позиции</th>
+                </tr>
+                <tr class="head-filters">
+                    <th><input class="col-filter" data-col="serialNumber"         list="col-dl-serialNumber"         type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="location"             list="col-dl-location"             type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="sensorType"           list="col-dl-sensorType"           type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="scale"                list="col-dl-scale"                type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="category"             list="col-dl-category"             type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="lastVerification"     list="col-dl-lastVerification"     type="search" placeholder="дд.мм.гггг"></th>
+                    <th><input class="col-filter" data-col="mpi"                  list="col-dl-mpi"                  type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="nextVerification"     list="col-dl-nextVerification"     type="search" placeholder="дд.мм.гггг"></th>
+                    <th><input class="col-filter" data-col="accuracyClass"        list="col-dl-accuracyClass"        type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="redLine"              list="col-dl-redLine"              type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="writeOff"             list="col-dl-writeOff"             type="search" placeholder="дд.мм.гггг"></th>
+                    <th><input class="col-filter" data-col="deferredVerification" list="col-dl-deferredVerification" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="movement"             list="col-dl-movement"             type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="rowNumber"            list="col-dl-rowNumber"            type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="groupName"            list="col-dl-groupName"            type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="positionName"         list="col-dl-positionName"         type="search" placeholder="Фильтр…"></th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
         </div>
         <div id="emptyAll" class="empty" hidden>Нет приборов</div>
     </section>
@@ -69,10 +107,15 @@
                 <input id="searchDocuments" type="search" placeholder="Поиск по названию или номеру документа…">
                 <button id="addDocumentBtn" class="btn-primary">+ Создать документ</button>
             </div>
-            <table id="tableDocuments" class="devices">
-                <thead><tr><th>Документ</th><th>Номер</th><th>Дата создания</th><th>Приборов</th><th>Описание</th></tr></thead>
-                <tbody></tbody>
-            </table>
+            <div class="table-loading-wrap" id="documentsTableWrap">
+                <div id="tableDocumentsLoading" class="table-loading-overlay">
+                    <div class="spinner"></div>
+                </div>
+                <table id="tableDocuments" class="devices">
+                    <thead><tr><th>Документ</th><th>Номер</th><th>Дата создания</th><th>Приборов</th><th>Описание</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
             <div id="emptyDocuments" class="empty" hidden>Документов пока нет. Создайте первый документ.</div>
         </div>
 
@@ -97,10 +140,15 @@
                 <div><h2>Приборы в документе</h2><span id="documentDeviceCount" class="muted">0 приборов</span></div>
                 <button id="addDeviceToDocumentBtn" class="btn-primary">+ Добавить прибор</button>
             </div>
-            <table id="tableDocumentDevices" class="devices">
-                <thead><tr><th>Фото</th><th>Наименование</th><th>Зав. номер</th><th>Позиция</th><th>Следующая поверка</th><th>Действие</th></tr></thead>
-                <tbody></tbody>
-            </table>
+            <div class="table-loading-wrap" id="documentDevicesWrap">
+                <div id="tableDocumentDevicesLoading" class="table-loading-overlay">
+                    <div class="spinner"></div>
+                </div>
+                <table id="tableDocumentDevices" class="devices">
+                    <thead><tr><th>Фото</th><th>Наименование</th><th>Зав. номер</th><th>Позиция</th><th>Следующая поверка</th><th>Действие</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
             <div id="emptyDocumentDevices" class="empty" hidden>В документ ещё не добавлены приборы.</div>
         </section>
     </section>
@@ -136,19 +184,24 @@
             <button id="refreshAuditBtn" class="btn">Обновить</button>
             <button id="showAllAuditBtn" class="btn-primary">Показать все</button>
         </div>
-        <table id="tableAudit" class="devices">
-            <thead>
-            <tr>
-                <th>Когда</th>
-                <th>Кто</th>
-                <th>Действие</th>
-                <th>Наименование</th>
-                <th>Зав. номер</th>
-                <th>Детали</th>
-            </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
+        <div class="table-loading-wrap" id="auditTableWrap">
+            <div id="tableAuditLoading" class="table-loading-overlay">
+                <div class="spinner"></div>
+            </div>
+            <table id="tableAudit" class="devices">
+                <thead>
+                <tr>
+                    <th>Когда</th>
+                    <th>Кто</th>
+                    <th>Действие</th>
+                    <th>Наименование</th>
+                    <th>Зав. номер</th>
+                    <th>Детали</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
         <div id="emptyAudit" class="empty" hidden>Журнал пуст</div>
     </section>
 
@@ -156,19 +209,24 @@
         <div class="toolbar">
             <button id="refreshTrashBtn" class="btn">Обновить</button>
         </div>
-        <table id="tableTrash" class="devices">
-            <thead>
-            <tr>
-                <th>ID</th>
-                <th>Фото</th>
-                <th>Наименование</th>
-                <th>Зав. номер</th>
-                <th>Позиция</th>
-                <th style="width:120px">Действия</th>
-            </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
+        <div class="table-loading-wrap" id="trashTableWrap">
+            <div id="tableTrashLoading" class="table-loading-overlay">
+                <div class="spinner"></div>
+            </div>
+            <table id="tableTrash" class="devices">
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Фото</th>
+                    <th>Наименование</th>
+                    <th>Зав. номер</th>
+                    <th>Позиция</th>
+                    <th style="width:120px">Действия</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
         <div id="emptyTrash" class="empty" hidden>Корзина пуста</div>
     </section>
 
@@ -238,9 +296,10 @@
                     <h3>Поиск и фильтрация</h3>
                     <ul>
                         <li>Введите часть наименования, заводского номера или позиции в поле поиска. Список отфильтруется по мере ввода.</li>
-                        <li>Фильтр статуса позволяет показать все приборы, просроченные, те, у которых поверка скоро, или приборы в норме.</li>
-                        <li>Сортировка позволяет упорядочить список по наименованию (А–Я или Я–А), а также по дате создания — сначала новые или сначала старые.</li>
-                        <li>Чтобы сбросить фильтры, очистите поле поиска и выберите «Все статусы».</li>
+                        <li>Под каждым заголовком столбца находится поле фильтра — можно сузить выборку по конкретному столбцу (как в Excel).</li>
+                        <li>При фокусе на поле фильтра или вводе первых символов выпадает список существующих значений этого столбца.</li>
+                        <li>Фильтры по столбцам работают совместно с глобальным поиском (условие «И»).</li>
+                        <li>Для сброса всех фильтров по столбцам нажмите «✕ Сбросить фильтры».</li>
                     </ul>
                     <h3>Добавление прибора</h3>
                     <ol>
@@ -351,7 +410,12 @@
                 <button type="submit" class="btn-primary">Создать пользователя</button>
             </form>
             <h2>Список пользователей</h2>
-            <table id="tableUsers" class="devices"><thead><tr><th>Имя</th><th>Роль</th><th>Действие</th></tr></thead><tbody></tbody></table>
+            <div class="table-loading-wrap" id="usersTableWrap">
+                <div id="tableUsersLoading" class="table-loading-overlay">
+                    <div class="spinner"></div>
+                </div>
+                <table id="tableUsers" class="devices"><thead><tr><th>Имя</th><th>Роль</th><th>Действие</th></tr></thead><tbody></tbody></table>
+            </div>
             <div id="emptyUsers" class="empty" hidden>Пользователей пока нет</div>
         </div>
     </section>
@@ -453,9 +517,7 @@
                 <div id="viewPhotoEmpty" class="photo-placeholder-large">Нет фото</div>
             </div>
 
-            <div class="view-details" id="viewDetails" aria-live="polite">
-                <!-- Поля карточки формируются из данных прибора в app.js -->
-            </div>
+            <div class="view-details" id="viewDetails" aria-live="polite"></div>
             <aside class="view-history" id="viewHistory">
                 <div class="history-heading"><h3>История движения</h3><button type="button" id="addMovementBtn" class="btn-primary">+ Операция</button></div>
                 <div id="movementCurrentState" class="movement-current-state">Текущее состояние: не указано</div>

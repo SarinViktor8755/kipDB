@@ -1,3 +1,6 @@
+/* =========================================================
+ *  Состояние приложения
+ * ========================================================= */
 const state = {
     selectedDocumentDeviceId: null,
     devices: [],
@@ -6,7 +9,8 @@ const state = {
     documents: [],
     currentDocument: null,
     users: [],
-    user: null
+    user: null,
+    columnFilters: {}
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -110,36 +114,213 @@ function compressImage(file) {
     });
 }
 
+/* =========================================================
+ *  Индикаторы загрузки
+ * ========================================================= */
+const MIN_LOADING_MS = 280;
+
+let __loadingDepth = 0;
+let __loadingStart = 0;
+let __loadingBarTimer = null;
+let __loadingHideTimer = null;
+
+function beginLoading() {
+    __loadingDepth++;
+    if (__loadingDepth === 1) {
+        __loadingStart = performance.now();
+        clearTimeout(__loadingHideTimer);
+    }
+    const bar = document.getElementById('loadingBar');
+    if (!bar) return;
+    bar.classList.add('active');
+    bar.style.width = '15%';
+    clearTimeout(__loadingBarTimer);
+    __loadingBarTimer = setTimeout(() => { bar.style.width = '70%'; }, 200);
+}
+
+function finishLoading() {
+    __loadingDepth = Math.max(0, __loadingDepth - 1);
+    if (__loadingDepth > 0) return;
+    const bar = document.getElementById('loadingBar');
+    if (!bar) return;
+    const elapsed = performance.now() - __loadingStart;
+    const wait = Math.max(0, MIN_LOADING_MS - elapsed);
+    clearTimeout(__loadingBarTimer);
+    bar.style.width = '100%';
+    __loadingHideTimer = setTimeout(() => {
+        bar.classList.remove('active');
+        bar.style.width = '0';
+    }, 220 + wait);
+}
+
+async function apiFetch(url, opts) {
+    beginLoading();
+    try { return await fetch(url, opts); }
+    finally { finishLoading(); }
+}
+
+function ensureLoadingOverlay(wrap) {
+    if (!wrap) return null;
+    if (!wrap.classList.contains('table-loading-wrap')) {
+        wrap.classList.add('table-loading-wrap');
+    }
+    let overlay = wrap.querySelector('.table-loading-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'table-loading-overlay';
+        overlay.innerHTML = '<div class="spinner"></div>';
+        wrap.insertBefore(overlay, wrap.firstChild);
+    }
+    return overlay;
+}
+
+function setTableBusy(wrap, busy) {
+    const overlay = ensureLoadingOverlay(wrap);
+    if (!overlay) return;
+    overlay.classList.toggle('active', !!busy);
+}
+
+function renderSkeleton(tbody, rows = 8, cols = 16) {
+    if (!tbody) return;
+    let html = '';
+    for (let r = 0; r < rows; r++) {
+        html += '<tr class="skeleton-row">';
+        for (let c = 0; c < cols; c++) {
+            const cls = c % 5 === 0 ? 'short' : (c % 3 === 0 ? 'tiny' : '');
+            html += `<td><div class="skeleton-line ${cls}"></div></td>`;
+        }
+        html += '</tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+function setButtonBusy(btn, busy, label) {
+    if (!btn) return;
+    if (busy) {
+        btn.dataset.prevLabel = btn.innerHTML;
+        btn.dataset.busy = '1';
+        btn.innerHTML = '<span class="btn-spinner"></span>' + (label || 'Загрузка…');
+    } else {
+        btn.dataset.busy = '0';
+        if (btn.dataset.prevLabel != null) {
+            btn.innerHTML = btn.dataset.prevLabel;
+            delete btn.dataset.prevLabel;
+        }
+    }
+}
+
+function debounce(fn, ms = 180) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+/* =========================================================
+ *  Datalist для фильтров по столбцам
+ * ========================================================= */
+const COLUMN_FILTER_DATALIST_MAX = 500;
+
+function cellValueForColumn(d, col) {
+    switch (col) {
+        case 'serialNumber':         return d.serialNumber || '';
+        case 'location':             return d.location || '';
+        case 'sensorType':           return d.sensorType || '';
+        case 'scale':                return formatScale(d);
+        case 'category':             return d.category || '';
+        case 'lastVerification':     return formatTableDate(d.lastVerification);
+        case 'mpi':                  return d.mpi || '';
+        case 'nextVerification':     return formatTableDate(d.nextVerification);
+        case 'accuracyClass':        return d.accuracyClass || '';
+        case 'redLine':              return d.redLine || '';
+        case 'writeOff':             return formatTableDate(d.writeOff);
+        case 'deferredVerification': return d.deferredVerification || '';
+        case 'movement':             return d.movement || '';
+        case 'rowNumber':            return d.rowNumber || '';
+        case 'groupName':            return d.groupName || '';
+        case 'positionName':         return d.positionName || d.name || '';
+        default:                     return '';
+    }
+}
+
+function populateColumnDatalists() {
+    const columns = [
+        'serialNumber', 'location', 'sensorType', 'scale', 'category',
+        'lastVerification', 'mpi', 'nextVerification', 'accuracyClass',
+        'redLine', 'writeOff', 'deferredVerification', 'movement',
+        'rowNumber', 'groupName', 'positionName'
+    ];
+
+    for (const col of columns) {
+        const listId = 'col-dl-' + col;
+        let dl = document.getElementById(listId);
+        if (!dl) {
+            dl = document.createElement('datalist');
+            dl.id = listId;
+            document.body.appendChild(dl);
+        }
+        const values = new Set();
+        for (const d of state.devices) {
+            const v = cellValueForColumn(d, col);
+            if (v && v !== '—') values.add(v);
+            if (values.size >= COLUMN_FILTER_DATALIST_MAX) break;
+        }
+        const sorted = [...values].sort((a, b) => a.localeCompare(b, 'ru'));
+        dl.innerHTML = sorted.map(v => `<option value="${escapeHtml(v)}"></option>`).join('');
+    }
+}
+
 function updateDatalists() {
     const names = [...new Set(state.devices.map(d => d.name).filter(Boolean))].sort();
     const locations = [...new Set(state.devices.map(d => d.location).filter(Boolean))].sort();
 
-    $('#listNames').innerHTML = names.map(n => `<option value="${escapeHtml(n)}">`).join('');
-    $('#listLocations').innerHTML = locations.map(l => `<option value="${escapeHtml(l)}">`).join('');
+    const listNames = $('#listNames');
+    const listLocations = $('#listLocations');
+    if (listNames) listNames.innerHTML = names.map(n => `<option value="${escapeHtml(n)}">`).join('');
+    if (listLocations) listLocations.innerHTML = locations.map(l => `<option value="${escapeHtml(l)}">`).join('');
+
+    populateColumnDatalists();
 }
 
+/* =========================================================
+ *  Загрузка данных
+ * ========================================================= */
 async function loadAll() {
-    await Promise.all([loadDevices(), loadStats()]);
-    render();
-    updateDatalists();
+    const wrap = document.getElementById('devicesTableWrap');
+    const tbody = document.querySelector('#tableAll tbody');
+
+    beginLoading();
+    setTableBusy(wrap, true);
+    if (!state.devices.length) renderSkeleton(tbody, 8, 16);
+
+    try {
+        await Promise.all([loadDevices(), loadStats()]);
+        render();
+        updateDatalists();
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
 }
+
 async function loadDevices() {
-    const r = await fetch('/api/devices');
+    const r = await apiFetch('/api/devices');
     if (!r.ok) throw new Error('devices: ' + r.status);
     state.devices = await r.json();
 }
+
 async function loadStats() {
-    const r = await fetch('/api/stats');
+    const r = await apiFetch('/api/stats');
     if (!r.ok) return;
     state.stats = await r.json();
 }
+
 async function loadAudit(limit = 200) {
-    const r = await fetch('/api/audit?limit=' + limit);
+    const r = await apiFetch('/api/audit?limit=' + limit);
     if (!r.ok) throw new Error('audit: ' + r.status);
     return r.json();
 }
+
 async function loadTrash() {
-    const r = await fetch('/api/devices/deleted');
+    const r = await apiFetch('/api/devices/deleted');
     if (!r.ok) throw new Error('trash: ' + r.status);
     return r.json();
 }
@@ -166,14 +347,27 @@ function formatScale(device) {
 
 function renderAllTab() {
     const q = ($('#searchAll').value || '').toLowerCase().trim();
-    const f = $('#statusFilter').value;
-    const sort = $('#sortFilter').value;
+    const fEl = $('#statusFilter');
+    const sEl = $('#sortFilter');
+    const f = fEl ? fEl.value : '';
+    const sort = sEl ? sEl.value : 'name_asc';
+
+    const activeCols = Object.entries(state.columnFilters)
+        .filter(([, v]) => v && v.trim() !== '');
+
     let rows = state.devices.filter(d => {
-        const haystack = [d.name,d.location,d.serialNumber,d.sensorType,d.unit,d.category,d.groupName,d.positionName,d.redLine].join(' ').toLowerCase();
-        if (q && !haystack.includes(q)) return false;
+        if (q) {
+            const haystack = [d.name,d.location,d.serialNumber,d.sensorType,d.unit,d.category,d.groupName,d.positionName,d.redLine].join(' ').toLowerCase();
+            if (!haystack.includes(q)) return false;
+        }
         if (f && statusOf(d) !== f) return false;
+        for (const [col, needle] of activeCols) {
+            const value = String(cellValueForColumn(d, col) || '').toLowerCase();
+            if (!value.includes(needle)) return false;
+        }
         return true;
     });
+
     rows.sort((a,b) => {
         if (sort === 'name_asc') return (a.positionName || a.name || '').localeCompare(b.positionName || b.name || '');
         if (sort === 'name_desc') return (b.positionName || b.name || '').localeCompare(a.positionName || a.name || '');
@@ -181,6 +375,7 @@ function renderAllTab() {
         if (sort === 'date_old') return (a.createdAt || '').localeCompare(b.createdAt || '');
         return 0;
     });
+
     $('#tableAll tbody').innerHTML = rows.map(d => `<tr data-id="${d.id}">
         <td>${escapeHtml(d.serialNumber || '—')}</td><td>${escapeHtml(d.location || '—')}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td>
@@ -192,44 +387,75 @@ function renderAllTab() {
         <td>${escapeHtml(d.location || '—')}</td><td>${escapeHtml(d.rowNumber || '—')}</td>
         <td>${escapeHtml(d.groupName || '—')}</td><td>${escapeHtml(d.positionName || d.name || '—')}</td>
     </tr>`).join('');
-    $('#emptyAll').hidden = rows.length !== 0;
+
+    const emptyEl = $('#emptyAll');
+    if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
 }
 
 async function renderAuditTab(limit = 200) {
-    const rows = await loadAudit(limit);
+    if (!state.user) return;
+    const wrap = document.getElementById('auditTableWrap');
     const tbody = $('#tableAudit tbody');
-    tbody.innerHTML = rows.map(r => `<tr>
-        <td>${formatDateTime(r.when)}</td>
-        <td>${escapeHtml(r.who)}</td>
-        <td>${escapeHtml(r.action)}</td>
-        <td>${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.serialNumber)}</td>
-        <td>${escapeHtml(r.details)}</td>
-    </tr>`).join('');
-    $('#emptyAudit').hidden = rows.length !== 0;
+    setTableBusy(wrap, true);
+    renderSkeleton(tbody, 6, 6);
+    beginLoading();
+    try {
+        const r = await apiFetch('/api/audit?limit=' + limit);
+        if (r.status === 401) return;
+        if (!r.ok) throw new Error('audit: ' + r.status);
+        const rows = await r.json();
+        tbody.innerHTML = rows.map(r => `<tr>
+            <td>${formatDateTime(r.when)}</td>
+            <td>${escapeHtml(r.who)}</td>
+            <td>${escapeHtml(r.action)}</td>
+            <td>${escapeHtml(r.name)}</td>
+            <td>${escapeHtml(r.serialNumber)}</td>
+            <td>${escapeHtml(r.details)}</td>
+        </tr>`).join('');
+        $('#emptyAudit').hidden = rows.length !== 0;
+    } catch (e) {
+        showToast('Ошибка загрузки журнала', e.message, 'error');
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
 }
 
 async function renderTrashTab() {
-    const rows = await loadTrash();
+    if (!state.user) return;
+    const wrap = document.getElementById('trashTableWrap');
     const tbody = $('#tableTrash tbody');
-    tbody.innerHTML = rows.map(d => `<tr>
-        <td>${d.id}</td>
-        <td class="photo-cell">${photoHtml(d)}</td>
-        <td>${escapeHtml(d.name)}</td>
-        <td>${escapeHtml(d.serialNumber || '—')}</td>
-        <td>${escapeHtml(d.location)}</td>
-        <td class="actions">
-            <button class="btn-link" data-act="restore" data-id="${d.id}">Восстановить</button>
-        </td>
-    </tr>`).join('');
-    $('#emptyTrash').hidden = rows.length !== 0;
+    setTableBusy(wrap, true);
+    renderSkeleton(tbody, 4, 6);
+    beginLoading();
+    try {
+        const r = await apiFetch('/api/devices/deleted');
+        if (r.status === 401) return;
+        if (!r.ok) throw new Error('trash: ' + r.status);
+        const rows = await r.json();
+        tbody.innerHTML = rows.map(d => `<tr>
+            <td>${d.id}</td>
+            <td class="photo-cell">${photoHtml(d)}</td>
+            <td>${escapeHtml(d.name)}</td>
+            <td>${escapeHtml(d.serialNumber || '—')}</td>
+            <td>${escapeHtml(d.location)}</td>
+            <td class="actions">
+                <button class="btn-link" data-act="restore" data-id="${d.id}">Восстановить</button>
+            </td>
+        </tr>`).join('');
+        $('#emptyTrash').hidden = rows.length !== 0;
+    } catch (e) {
+        showToast('Ошибка загрузки корзины', e.message, 'error');
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
 }
 
-// ==========================================
-// РОУТИНГ (URL с хэшем)
-// ==========================================
+/* =========================================================
+ *  РОУТИНГ
+ * ========================================================= */
 function switchTab(tabName) {
-    // Обновляем классы активности
     $all('.tab').forEach(b => b.classList.remove('active'));
     $all('.tab-panel').forEach(p => p.classList.remove('active'));
 
@@ -241,7 +467,6 @@ function switchTab(tabName) {
 
     state.currentTab = tabName;
 
-    // Данные вкладок загружаются только после авторизации.
     if (!state.user) return;
     if (tabName === 'users' && state.user.role !== 'admin') { window.location.hash = 'all'; return; }
     if (tabName === 'audit') renderAuditTab(200);
@@ -255,9 +480,9 @@ function switchTab(tabName) {
     }
 }
 
-// Разделы инструкции используют собственные якоря #help-*. Они не должны
-// попадать в общий обработчик вкладок приложения.
-function handleAppRoute() {
+async function handleAppRoute() {
+    if (!state.user) return;
+
     const hash = decodeURIComponent(window.location.hash.replace(/^#/, '')) || 'all';
     const helpTarget = document.getElementById(hash);
 
@@ -271,11 +496,8 @@ function handleAppRoute() {
     switchTab(allowedTabs.includes(hash) ? hash : 'all');
 }
 
-// Слушаем изменения хэша (кнопки Назад/Вперёд и прямые ссылки).
 window.addEventListener('hashchange', handleAppRoute);
 
-// Перехватываем содержание инструкции: прокручиваем к разделу без изменения
-// URL-хэша, чтобы маршрутизатор вкладок не воспринимал якорь как вкладку.
 document.addEventListener('click', (event) => {
     const link = event.target.closest('.help-toc a[href^="#help-"]');
     if (!link) return;
@@ -291,32 +513,25 @@ document.addEventListener('click', (event) => {
     requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 });
 
-// Обработчик кликов по меню
 $all('.tab').forEach(btn => {
     btn.addEventListener('click', (e) => {
-        e.preventDefault(); // Отменяем стандартный переход по ссылке
+        e.preventDefault();
         const tabName = btn.dataset.tab;
-        // Меняем URL (это вызовет hashchange, который переключит вкладку)
         window.location.hash = tabName;
-        // Если хэш не изменился (например, кликнули на текущую вкладку),
-        // принудительно вызываем switchTab
         if (window.location.hash.replace('#', '') === tabName) {
             switchTab(tabName);
         }
     });
 });
 
-// При загрузке страницы определяем вкладку по URL. Если адрес содержит
-// якорь раздела инструкции, открываем инструкцию и прокручиваем к нему.
-document.addEventListener('DOMContentLoaded', handleAppRoute);
-
-// ==========================================
-// АВТОРИЗАЦИЯ И РОЛИ
-// ==========================================
+/* =========================================================
+ *  АВТОРИЗАЦИЯ И РОЛИ
+ * ========================================================= */
 function roleTitle(role) { return role === 'admin' ? 'Администратор' : role === 'guest' ? 'Гость · просмотр' : 'Пользователь'; }
 
 function fillUserSelect() {
     const select = $('#userSelect');
+    if (!select) return;
     const current = state.user ? state.user.login : 'guest';
     select.innerHTML = '<option value="guest">Гость (только просмотр)</option>' +
         state.users.map(u => `<option value="${escapeHtml(u.login).replaceAll('"', '&quot;')}">${escapeHtml(u.name)}</option>`).join('');
@@ -329,44 +544,90 @@ function applyRoleUI() {
     document.body.classList.toggle('read-only', !!isGuest);
     document.body.classList.toggle('auth-locked', !state.user);
     $all('.admin-only').forEach(el => { el.hidden = !isAdmin; });
-    $('#currentUser').textContent = state.user ? `${state.user.name} · ${roleTitle(state.user.role)}` : 'Не выполнен вход';
-    $('#logoutBtn').hidden = !state.user;
+    const cur = $('#currentUser');
+    if (cur) cur.textContent = state.user ? `${state.user.name} · ${roleTitle(state.user.role)}` : 'Не выполнен вход';
+    const logout = $('#logoutBtn');
+    if (logout) logout.hidden = !state.user;
     if (state.user) $('#userSelect').value = state.user.login;
 }
 
+/* =========================================================
+ *  Неблокирующая инициализация:
+ *  - сначала рисуем UI (гостевой режим, кнопки скрыты),
+ *  - параллельно грузим список пользователей, сессию и данные,
+ *  - по мере готовности — обновляем интерфейс.
+ * ========================================================= */
 async function initializeAuth() {
+    // Сразу показываем UI, не блокируя страницу
+    applyRoleUI();
+
+    // Индикатор загрузки на всё время инициализации
+    beginLoading();
+
+    // Параллельно: пользователи, сессия, данные
+    const usersPromise = fetch('/api/auth/users')
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => []);
+    const mePromise = fetch('/api/auth/me')
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null);
+    const dataPromise = loadAll().catch(() => {}); // тихо, если 401
+
     try {
-        const [usersResponse, meResponse] = await Promise.all([fetch('/api/auth/users'), fetch('/api/auth/me')]);
-        if (!usersResponse.ok || !meResponse.ok) throw new Error('Не удалось получить список пользователей');
-        state.users = await usersResponse.json();
-        const me = await meResponse.json();
+        const [users, me] = await Promise.all([usersPromise, mePromise]);
+        state.users = Array.isArray(users) ? users : [];
         fillUserSelect();
-        if (me.authenticated) {
-            state.user = me.user; applyRoleUI(); await afterLogin();
+
+        if (me && me.authenticated) {
+            state.user = me.user;
+            applyRoleUI();
+            await handleAppRoute();
+            // Данные уже могли прийти; если нет — дождёмся
+            await dataPromise;
+            if (!state.devices.length) {
+                await loadAll().catch(() => {});
+            }
         } else {
+            // Гостевой вход — не блокирует отрисовку
             $('#userSelect').value = 'guest';
-            await loginSelectedUser('');
+            await loginSelectedUser('').catch(() => {});
+            await handleAppRoute();
+            await dataPromise;
         }
     } catch (e) {
         showToast('Ошибка авторизации', e.message, 'error');
+    } finally {
+        finishLoading();
     }
 }
 
 async function afterLogin() {
     applyRoleUI();
-    await loadAll();
-    switchTab(state.currentTab || 'all');
+    loadAll().catch(e => showToast('Ошибка загрузки данных', e.message, 'error'));
 }
 
 async function loginSelectedUser(password = '') {
     const login = $('#userSelect').value;
-    if (!login) return;
-    const r = await fetch('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({login, password})});
-    if (!r.ok) { const err = await r.json().catch(()=>({})); $('#loginError').textContent = err.error || 'Ошибка входа'; $('#loginError').hidden = false; return false; }
+    if (!login) return false;
+    const r = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password })
+    });
+    if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        const errEl = $('#loginError');
+        if (errEl) { errEl.textContent = err.error || 'Ошибка входа'; errEl.hidden = false; }
+        return false;
+    }
     const result = await r.json();
     state.user = result.user;
-    $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#loginError').hidden = true;
+    $('#passwordModal').hidden = true;
+    $('#loginPassword').value = '';
+    $('#loginError').hidden = true;
+
     await afterLogin();
+    await handleAppRoute();
     showToast('Вход выполнен', `${state.user.name}: ${roleTitle(state.user.role)}`, 'info');
     return true;
 }
@@ -386,14 +647,17 @@ $('#userSelect').addEventListener('change', async () => {
 
 $('#passwordForm').addEventListener('submit', async e => {
     e.preventDefault();
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    setButtonBusy(submitBtn, true, 'Вход…');
     try { await loginSelectedUser($('#loginPassword').value); }
     catch (err) { $('#loginError').textContent = err.message; $('#loginError').hidden = false; }
+    finally { setButtonBusy(submitBtn, false); }
 });
 $('#cancelLoginBtn').addEventListener('click', () => {
     $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#userSelect').value = state.user ? state.user.login : '';
 });
 $('#logoutBtn').addEventListener('click', async () => {
-    await fetch('/api/auth/logout', {method:'POST'});
+    await apiFetch('/api/auth/logout', {method:'POST'});
     state.user = null;
     $('#userSelect').value = 'guest';
     await loginSelectedUser('');
@@ -402,21 +666,39 @@ $('#logoutBtn').addEventListener('click', async () => {
 });
 
 async function loadUsers() {
-    const r = await fetch('/api/users');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const users = await r.json();
-    $('#tableUsers tbody').innerHTML = users.map(u => `<tr><td>${escapeHtml(u.name)}</td><td>${u.role === 'admin' ? 'Администратор' : 'Пользователь'}</td><td>${u.role === 'admin' ? '<span class="muted">Защищённая учётная запись</span>' : `<button class="btn-danger btn-small" data-delete-user="${u.id}" data-user-name="${escapeHtml(u.name).replaceAll('\"','&quot;')}">Удалить</button>`}</td></tr>`).join('');
-    $('#emptyUsers').hidden = users.length > 0;
+    if (!state.user) return;
+    const wrap = document.getElementById('usersTableWrap');
+    const tbody = $('#tableUsers tbody');
+    setTableBusy(wrap, true);
+    renderSkeleton(tbody, 4, 3);
+    beginLoading();
+    try {
+        const r = await apiFetch('/api/users');
+        if (r.status === 401) return;
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const users = await r.json();
+        tbody.innerHTML = users.map(u => `<tr><td>${escapeHtml(u.name)}</td><td>${u.role === 'admin' ? 'Администратор' : 'Пользователь'}</td><td>${u.role === 'admin' ? '<span class="muted">Защищённая учётная запись</span>' : `<button class="btn-danger btn-small" data-delete-user="${u.id}" data-user-name="${escapeHtml(u.name).replaceAll('\"','&quot;')}">Удалить</button>`}</td></tr>`).join('');
+        $('#emptyUsers').hidden = users.length > 0;
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
 }
 
 $('#createUserForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const name = $('#newUserName').value.trim(), password = $('#newUserPassword').value;
-    const r = await fetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,password})});
-    if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Не удалось создать пользователя', err.error || `HTTP ${r.status}`, 'error'); return; }
-    $('#newUserName').value = ''; $('#newUserPassword').value = '';
-    const usersResponse = await fetch('/api/auth/users'); state.users = await usersResponse.json(); fillUserSelect();
-    await loadUsers(); showToast('Пользователь создан', name, 'ok');
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    setButtonBusy(submitBtn, true, 'Создание…');
+    try {
+        const name = $('#newUserName').value.trim(), password = $('#newUserPassword').value;
+        const r = await apiFetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,password})});
+        if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Не удалось создать пользователя', err.error || `HTTP ${r.status}`, 'error'); return; }
+        $('#newUserName').value = ''; $('#newUserPassword').value = '';
+        const usersResponse = await apiFetch('/api/auth/users'); state.users = await usersResponse.json(); fillUserSelect();
+        await loadUsers(); showToast('Пользователь создан', name, 'ok');
+    } finally {
+        setButtonBusy(submitBtn, false);
+    }
 });
 
 $('#tableUsers').addEventListener('click', async e => {
@@ -425,27 +707,39 @@ $('#tableUsers').addEventListener('click', async e => {
     const id = Number(btn.dataset.deleteUser);
     const name = btn.dataset.userName || 'пользователя';
     if (!confirm(`Удалить пользователя «${name}»? Его активные сессии будут завершены.`)) return;
-    const r = await fetch('/api/users/' + id, {method:'DELETE'});
+    const r = await apiFetch('/api/users/' + id, {method:'DELETE'});
     if (!r.ok) {
         const err = await r.json().catch(()=>({}));
         showToast('Не удалось удалить пользователя', err.error || `HTTP ${r.status}`, 'error');
         return;
     }
-    const usersResponse = await fetch('/api/auth/users');
+    const usersResponse = await apiFetch('/api/auth/users');
     state.users = await usersResponse.json();
     fillUserSelect();
     await loadUsers();
     showToast('Пользователь удалён', name, 'ok');
 });
 
-// ==========================================
-// ДОКУМЕНТЫ
-// ==========================================
+/* =========================================================
+ *  ДОКУМЕНТЫ
+ * ========================================================= */
 async function loadDocuments() {
-    const r = await fetch('/api/documents');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    state.documents = await r.json();
-    renderDocuments();
+    if (!state.user) return;
+    const wrap = document.getElementById('documentsTableWrap');
+    const tbody = document.querySelector('#tableDocuments tbody');
+    setTableBusy(wrap, true);
+    renderSkeleton(tbody, 5, 5);
+    beginLoading();
+    try {
+        const r = await apiFetch('/api/documents');
+        if (r.status === 401) return;
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        state.documents = await r.json();
+        renderDocuments();
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
 }
 
 function renderDocuments() {
@@ -474,10 +768,19 @@ function openDocumentForm(doc = null) {
 function closeDocumentForm() { $('#documentModal').hidden = true; }
 
 async function openDocument(id) {
-    const r = await fetch('/api/documents/' + id);
-    if (!r.ok) throw new Error('Не удалось открыть документ: HTTP ' + r.status);
-    state.currentDocument = await r.json();
-    renderDocumentWorkspace();
+    const wrap = document.getElementById('documentDevicesWrap');
+    setTableBusy(wrap, true);
+    beginLoading();
+    try {
+        const r = await apiFetch('/api/documents/' + id);
+        if (r.status === 401) return;
+        if (!r.ok) throw new Error('Не удалось открыть документ: HTTP ' + r.status);
+        state.currentDocument = await r.json();
+        renderDocumentWorkspace();
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
 }
 
 function renderDocumentWorkspace() {
@@ -543,7 +846,7 @@ async function showAddDeviceToDocument() {
     $('#documentDeviceSearch').focus();
 }
 
-$('#documentDeviceSearch').addEventListener('input', renderDocumentDeviceSearch);
+$('#documentDeviceSearch').addEventListener('input', debounce(renderDocumentDeviceSearch, 120));
 $('#documentDeviceSearchResults').addEventListener('click', e => {
     const btn = e.target.closest('[data-select-document-device]');
     if (!btn) return;
@@ -557,7 +860,7 @@ $('#documentDeviceSearchResults').addEventListener('click', e => {
 });
 
 $('#addDocumentBtn').addEventListener('click', () => openDocumentForm());
-$('#searchDocuments').addEventListener('input', renderDocuments);
+$('#searchDocuments').addEventListener('input', debounce(renderDocuments, 180));
 $('#documentModalClose').addEventListener('click', closeDocumentForm);
 $('#cancelDocumentBtn').addEventListener('click', closeDocumentForm);
 $('#backToDocumentsBtn').addEventListener('click', closeDocumentWorkspace);
@@ -565,7 +868,7 @@ $('#editDocumentBtn').addEventListener('click', () => state.currentDocument && o
 $('#deleteDocumentBtn').addEventListener('click', async () => {
     const d = state.currentDocument;
     if (!d || !confirm('Удалить документ «' + d.title + '»? Приборы останутся в общей базе.')) return;
-    const r = await fetch('/api/documents/' + d.id, {method:'DELETE'});
+    const r = await apiFetch('/api/documents/' + d.id, {method:'DELETE'});
     if (!r.ok) { showToast('Ошибка удаления документа', 'HTTP ' + r.status, 'error'); return; }
     state.currentDocument = null;
     $('#documentWorkspace').hidden = true; $('#documentsListView').hidden = false;
@@ -573,15 +876,21 @@ $('#deleteDocumentBtn').addEventListener('click', async () => {
 });
 $('#documentForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const id = $('#documentId').value;
-    const body = {title:$('#documentTitle').value.trim(), documentNumber:$('#documentNumber').value.trim(), description:$('#documentDescription').value.trim()};
-    const r = await fetch(id ? '/api/documents/' + id : '/api/documents', {method:id ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-    if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Ошибка сохранения', err.error || ('HTTP ' + r.status), 'error'); return; }
-    const saved = await r.json(); closeDocumentForm();
-    if (id) { state.currentDocument = saved; renderDocumentWorkspace(); }
-    await loadDocuments();
-    if (!id) await openDocument(saved.id);
-    showToast(id ? 'Документ обновлён' : 'Документ создан', saved.title, 'info');
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    setButtonBusy(submitBtn, true, 'Сохранение…');
+    try {
+        const id = $('#documentId').value;
+        const body = {title:$('#documentTitle').value.trim(), documentNumber:$('#documentNumber').value.trim(), description:$('#documentDescription').value.trim()};
+        const r = await apiFetch(id ? '/api/documents/' + id : '/api/documents', {method:id ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+        if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Ошибка сохранения', err.error || ('HTTP ' + r.status), 'error'); return; }
+        const saved = await r.json(); closeDocumentForm();
+        if (id) { state.currentDocument = saved; renderDocumentWorkspace(); }
+        await loadDocuments();
+        if (!id) await openDocument(saved.id);
+        showToast(id ? 'Документ обновлён' : 'Документ создан', saved.title, 'info');
+    } finally {
+        setButtonBusy(submitBtn, false);
+    }
 });
 $('#tableDocuments').addEventListener('click', e => {
     const row = e.target.closest('tr[data-document-id]');
@@ -591,32 +900,57 @@ $('#addDeviceToDocumentBtn').addEventListener('click', showAddDeviceToDocument);
 $('#closeAddDeviceDocument').addEventListener('click', () => $('#addDeviceDocumentModal').hidden = true);
 $('#cancelAddDeviceDocument').addEventListener('click', () => $('#addDeviceDocumentModal').hidden = true);
 $('#confirmAddDeviceDocument').addEventListener('click', async () => {
+    const btn = $('#confirmAddDeviceDocument');
     const d = state.currentDocument, deviceId = Number(state.selectedDocumentDeviceId);
     if (!d || !deviceId) return;
-    const r = await fetch(`/api/documents/${d.id}/devices/${deviceId}`, {method:'POST'});
-    if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Не удалось добавить прибор', err.error || ('HTTP ' + r.status), 'error'); return; }
-    state.currentDocument = await r.json(); renderDocumentWorkspace();
-    $('#addDeviceDocumentModal').hidden = true;
-    state.selectedDocumentDeviceId = null;
-    await loadDocuments(); showToast('Прибор добавлен в документ', '', 'info');
+    setButtonBusy(btn, true, 'Добавление…');
+    try {
+        const r = await apiFetch(`/api/documents/${d.id}/devices/${deviceId}`, {method:'POST'});
+        if (!r.ok) { const err = await r.json().catch(()=>({})); showToast('Не удалось добавить прибор', err.error || ('HTTP ' + r.status), 'error'); return; }
+        state.currentDocument = await r.json(); renderDocumentWorkspace();
+        $('#addDeviceDocumentModal').hidden = true;
+        state.selectedDocumentDeviceId = null;
+        await loadDocuments(); showToast('Прибор добавлен в документ', '', 'info');
+    } finally {
+        setButtonBusy(btn, false);
+    }
 });
 $('#tableDocumentDevices').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-unlink-device]');
     if (!btn || !state.currentDocument) return;
     const id = Number(btn.dataset.unlinkDevice);
     if (!confirm('Убрать прибор из документа? Сам прибор останется в общей базе.')) return;
-    const r = await fetch(`/api/documents/${state.currentDocument.id}/devices/${id}`, {method:'DELETE'});
+    const r = await apiFetch(`/api/documents/${state.currentDocument.id}/devices/${id}`, {method:'DELETE'});
     if (!r.ok) { showToast('Ошибка', 'HTTP ' + r.status, 'error'); return; }
     state.currentDocument = await r.json(); renderDocumentWorkspace(); await loadDocuments();
 });
 
-// ==========================================
-// ОСТАЛЬНЫЕ ОБРАБОТЧИКИ
-// ==========================================
+/* =========================================================
+ *  ОБРАБОТЧИКИ "ВСЕ ПРИБОРЫ"
+ * ========================================================= */
+$('#searchAll').addEventListener('input', debounce(renderAllTab, 180));
+if ($('#statusFilter')) $('#statusFilter').addEventListener('change', renderAllTab);
+if ($('#sortFilter')) $('#sortFilter').addEventListener('change', renderAllTab);
 
-$('#searchAll').addEventListener('input', renderAllTab);
-$('#statusFilter').addEventListener('change', renderAllTab);
-$('#sortFilter').addEventListener('change', renderAllTab);
+$all('.col-filter').forEach(inp => {
+    inp.addEventListener('input', debounce(() => {
+        const col = inp.dataset.col;
+        const value = (inp.value || '').toLowerCase().trim();
+        if (value) state.columnFilters[col] = value;
+        else delete state.columnFilters[col];
+        renderAllTab();
+    }, 200));
+});
+
+const resetBtn = $('#resetColumnFiltersBtn');
+if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+        state.columnFilters = {};
+        $all('.col-filter').forEach(inp => { inp.value = ''; });
+        renderAllTab();
+    });
+}
+
 $('#refreshAuditBtn').addEventListener('click', () => renderAuditTab(200));
 $('#showAllAuditBtn').addEventListener('click', () => renderAuditTab(999999));
 $('#refreshTrashBtn').addEventListener('click', renderTrashTab);
@@ -700,6 +1034,7 @@ $('#removePhotoBtn').addEventListener('click', async (e) => {
 
     if (!confirm('Удалить фотографию этого прибора?')) return;
 
+    beginLoading();
     try {
         const body = {
             ...collectDeviceFormData(),
@@ -731,61 +1066,71 @@ $('#removePhotoBtn').addEventListener('click', async (e) => {
 
     } catch (err) {
         showToast('Ошибка удаления фото', err.message, 'error');
+    } finally {
+        finishLoading();
     }
 });
 
 $('#deviceForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const id = $('#fId').value;
-    const body = collectDeviceFormData();
-    const url = id ? '/api/devices/' + id : '/api/devices';
-    const method = id ? 'PUT' : 'POST';
-    const r = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    });
-
-    if (r.status === 409) {
-        const err = await r.json();
-        showToast('Конфликт изменений', err.message || 'Прибор уже был изменён другим пользователем', 'error');
-        await loadAll();
-        closeModal();
-        return;
-    }
-    if (!r.ok) { showToast('Ошибка сохранения', 'HTTP ' + r.status, 'error'); return; }
-    const saved = await r.json();
-
-    const fileInput = $('#fPhoto');
-    if (fileInput.files && fileInput.files[0]) {
-        const file = fileInput.files[0];
-        let blob = file;
-        if (file.type.startsWith('image/')) {
-            try { blob = await compressImage(file); }
-            catch (e) { console.warn('Сжатие не удалось', e); }
-        }
-        const fr = await fetch('/api/devices/' + saved.id + '/photo', {
-            method: 'POST',
-            headers: { 'Content-Type': blob.type || 'application/octet-stream' },
-            body: blob
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    setButtonBusy(submitBtn, true, 'Сохранение…');
+    beginLoading();
+    try {
+        const id = $('#fId').value;
+        const body = collectDeviceFormData();
+        const url = id ? '/api/devices/' + id : '/api/devices';
+        const method = id ? 'PUT' : 'POST';
+        const r = await fetch(url, {
+            method, headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
         });
-        if (!fr.ok) {
-            showToast('Фото не загружено', 'HTTP ' + fr.status, 'error');
-        } else {
-            const photoResp = await fr.json();
-            showToast('Фото обновлено', photoResp.changes || '', 'ok');
+
+        if (r.status === 409) {
+            const err = await r.json();
+            showToast('Конфликт изменений', err.message || 'Прибор уже был изменён другим пользователем', 'error');
+            await loadAll();
+            closeModal();
+            return;
         }
-    }
+        if (!r.ok) { showToast('Ошибка сохранения', 'HTTP ' + r.status, 'error'); return; }
+        const saved = await r.json();
 
-    if (!id) showToast('Прибор добавлен', saved.name || '', 'info');
-    else {
-        const changes = saved.changes;
-        if (!changes || changes === 'no changes') showToast('Изменений нет', 'Поля не были изменены', 'info');
-        else showToast('Изменения сохранены', humanizeChanges(changes), 'ok');
-    }
+        const fileInput = $('#fPhoto');
+        if (fileInput.files && fileInput.files[0]) {
+            const file = fileInput.files[0];
+            let blob = file;
+            if (file.type.startsWith('image/')) {
+                try { blob = await compressImage(file); }
+                catch (e) { console.warn('Сжатие не удалось', e); }
+            }
+            const fr = await fetch('/api/devices/' + saved.id + '/photo', {
+                method: 'POST',
+                headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+                body: blob
+            });
+            if (!fr.ok) {
+                showToast('Фото не загружено', 'HTTP ' + fr.status, 'error');
+            } else {
+                const photoResp = await fr.json();
+                showToast('Фото обновлено', photoResp.changes || '', 'ok');
+            }
+        }
 
-    closeModal();
-    await loadAll();
-    if (state.currentTab === 'audit') await renderAuditTab(200);
+        if (!id) showToast('Прибор добавлен', saved.name || '', 'info');
+        else {
+            const changes = saved.changes;
+            if (!changes || changes === 'no changes') showToast('Изменений нет', 'Поля не были изменены', 'info');
+            else showToast('Изменения сохранены', humanizeChanges(changes), 'ok');
+        }
+
+        closeModal();
+        await loadAll();
+        if (state.currentTab === 'audit') await renderAuditTab(200);
+    } finally {
+        setButtonBusy(submitBtn, false);
+        finishLoading();
+    }
 });
 
 let currentViewDevice = null;
@@ -848,7 +1193,9 @@ function openViewModal(device) {
     loadDeviceHistory(device.id).catch(err => showToast('Не удалось загрузить историю', err.message, 'error'));
 }
 async function loadDeviceHistory(deviceId) {
-    const r = await fetch('/api/devices/' + deviceId + '/movements');
+    $('#physicalHistory').innerHTML = '<span class="muted">Загрузка…</span>';
+    $('#documentHistory').innerHTML = '<span class="muted">Загрузка…</span>';
+    const r = await apiFetch('/api/devices/' + deviceId + '/movements');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     const movements = data.movements || [];
@@ -872,9 +1219,11 @@ $('#cancelMovementBtn').addEventListener('click', () => { $('#movementForm').hid
 $('#movementForm').addEventListener('submit', async e => {
     e.preventDefault();
     if (!currentViewDevice) return;
-    const payload = { eventDate:$('#movementDate').value, eventType:$('#movementType').value, fromPlace:$('#movementFrom').value.trim(), toPlace:$('#movementTo').value.trim(), note:$('#movementNote').value.trim() };
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    setButtonBusy(submitBtn, true, 'Сохранение…');
     try {
-        const r = await fetch('/api/devices/' + currentViewDevice.id + '/movements', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const payload = { eventDate:$('#movementDate').value, eventType:$('#movementType').value, fromPlace:$('#movementFrom').value.trim(), toPlace:$('#movementTo').value.trim(), note:$('#movementNote').value.trim() };
+        const r = await apiFetch('/api/devices/' + currentViewDevice.id + '/movements', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const result = await r.json();
         if (!r.ok) throw new Error(result.error || ('HTTP ' + r.status));
         $('#movementForm').hidden = true; $('#movementForm').reset();
@@ -882,6 +1231,7 @@ $('#movementForm').addEventListener('submit', async e => {
         if (payload.eventType === 'Установлен' && payload.toPlace) { currentViewDevice.location = payload.toPlace; await loadAll(); }
         showToast('Операция сохранена', payload.eventType, 'ok');
     } catch(err) { showToast('Ошибка сохранения операции', err.message, 'error'); }
+    finally { setButtonBusy(submitBtn, false); }
 });
 
 function closeViewModal() {
@@ -904,6 +1254,7 @@ $('#viewDeleteBtn').addEventListener('click', async () => {
     const d = currentViewDevice;
     if (!confirm('Переместить прибор «' + (d.name || '') + '» в корзину?')) return;
 
+    beginLoading();
     try {
         const r = await fetch('/api/devices/' + d.id, { method: 'DELETE' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -911,13 +1262,15 @@ $('#viewDeleteBtn').addEventListener('click', async () => {
         closeViewModal();
 
         $('#searchAll').value = '';
-        $('#statusFilter').value = '';
+        if ($('#statusFilter')) $('#statusFilter').value = '';
 
         await loadAll();
         showToast('Прибор перемещён в корзину', d.name || '', 'info');
         if (state.currentTab === 'audit') await renderAuditTab(200);
     } catch (err) {
         showToast('Ошибка удаления', err.message, 'error');
+    } finally {
+        finishLoading();
     }
 });
 
@@ -937,6 +1290,7 @@ $('#tableTrash').addEventListener('click', async e => {
         const id = parseInt(btn.dataset.id, 10);
         if (!confirm('Восстановить этот прибор?')) return;
 
+        beginLoading();
         try {
             const r = await fetch('/api/devices/' + id + '/restore', { method: 'POST' });
             if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -947,6 +1301,8 @@ $('#tableTrash').addEventListener('click', async e => {
             showToast('Прибор восстановлен', '', 'ok');
         } catch (err) {
             showToast('Ошибка восстановления', err.message, 'error');
+        } finally {
+            finishLoading();
         }
     }
 });
@@ -1001,4 +1357,11 @@ $('#viewPrintBtn').addEventListener('click', () => {
     printDeviceCard(currentViewDevice);
 });
 
-initializeAuth();
+/* =========================================================
+ *  СТАРТ
+ * ========================================================= */
+document.addEventListener('DOMContentLoaded', () => {
+    // Страница уже отрисована (HTML/CSS загрузились),
+    // теперь в фоне подтягиваем сессию и данные.
+    initializeAuth();
+});
