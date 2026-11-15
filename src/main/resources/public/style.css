@@ -791,3 +791,21 @@ button[data-busy="1"] .btn-spinner {
     animation: spin .7s linear infinite;
     vertical-align: -2px;
 }
+
+
+/* Журнал перемещений: визуальное разделение записей по календарным датам */
+#tableMovements .movement-date-row td {
+    background: var(--surface-2, #f1f3f5);
+    color: var(--text, inherit);
+    font-weight: 700;
+    padding-top: 11px;
+    padding-bottom: 11px;
+    border-top: 1px solid var(--border, #ddd);
+}
+#tableMovements .movement-date-row td span {
+    float: right;
+    color: var(--muted, #777);
+    font-size: .85em;
+    font-weight: 400;
+}
+#movementsCount { white-space: nowrap; }

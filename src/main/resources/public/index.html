@@ -23,6 +23,7 @@
 <nav class="tabs">
     <a href="#all" class="tab active" data-tab="all">Все приборы</a>
     <a href="#documents" class="tab" data-tab="documents">Документы</a>
+    <a href="#movements" class="tab" data-tab="movements">Перемещения</a>
     <a href="#audit" class="tab" data-tab="audit">Журнал</a>
     <a href="#trash" class="tab" data-tab="trash">Корзина</a>
     <a href="#users" class="tab admin-only" data-tab="users" hidden>Пользователи</a>
@@ -196,6 +197,28 @@
             <div class="modal-actions"><button id="cancelAddDeviceDocument" type="button" class="btn">Отмена</button><button id="confirmAddDeviceDocument" type="button" class="btn-primary" disabled>Добавить</button></div>
         </div>
     </div>
+
+    <section id="tab-movements" class="tab-panel">
+        <div class="toolbar">
+            <input id="searchMovements" type="search" placeholder="Поиск по прибору, зав. номеру, операции, месту или примечанию…">
+            <button id="loadAllMovementsBtn" class="btn-primary" type="button">Загрузить все</button>
+            <button id="loadRecentMovementsBtn" class="btn" type="button" hidden>Последние 150</button>
+            <span id="movementsCount" class="muted"></span>
+        </div>
+        <div class="table-loading-wrap" id="movementsTableWrap">
+            <div id="tableMovementsLoading" class="table-loading-overlay">
+                <div class="spinner"></div>
+            </div>
+            <table id="tableMovements" class="devices">
+                <thead><tr>
+                    <th>Дата</th><th>Прибор</th><th>Зав. номер</th><th>Операция</th>
+                    <th>Откуда</th><th>Куда</th><th>Примечание</th><th>Кто</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <div id="emptyMovements" class="empty" hidden>Перемещений пока нет</div>
+    </section>
 
     <section id="tab-audit" class="tab-panel">
         <div class="toolbar">

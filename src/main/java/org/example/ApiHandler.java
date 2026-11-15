@@ -15,6 +15,7 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.net.URLDecoder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -238,6 +239,22 @@ public class ApiHandler implements HttpHandler {
                     return;
                 }
                 sendJson(ex, 404, new JSONObject().put("error", "not found"));
+                return;
+            }
+
+            if (path.equals("/api/movements") && "GET".equals(method)) {
+                String search = "";
+                boolean all = false;
+                String query = ex.getRequestURI().getRawQuery();
+                if (query != null) for (String part : query.split("&")) {
+                    int eq = part.indexOf('=');
+                    String key = eq >= 0 ? part.substring(0, eq) : part;
+                    String value = eq >= 0 ? part.substring(eq + 1) : "";
+                    if ("q".equals(key)) search = URLDecoder.decode(value, StandardCharsets.UTF_8);
+                    if ("all".equals(key)) all = "true".equalsIgnoreCase(value) || "1".equals(value);
+                }
+                JSONArray rows = Db.getMovements(search, all ? 0 : 150);
+                sendJsonGzip(ex, 200, rows);
                 return;
             }
 

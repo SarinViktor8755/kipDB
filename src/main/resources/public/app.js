@@ -466,6 +466,85 @@ function renderAllTab() {
     if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
 }
 
+let movementsLoadAll = false;
+let movementsSearchTimer = null;
+
+function movementDateKey(value) {
+    if (!value) return 'Без даты';
+    const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : String(value);
+}
+
+async function loadMovements(loadAll = movementsLoadAll) {
+    if (!state.user) return;
+    movementsLoadAll = !!loadAll;
+    const wrap = $('#movementsTableWrap');
+    const tbody = $('#tableMovements tbody');
+    setTableBusy(wrap, true);
+    if (!tbody.children.length) renderSkeleton(tbody, 8, 5);
+    beginLoading();
+    try {
+        const q = ($('#searchMovements').value || '').trim();
+        const params = new URLSearchParams();
+        if (q) params.set('q', q);
+        if (movementsLoadAll) params.set('all', 'true');
+        const r = await apiFetch('/api/movements?' + params.toString());
+        if (r.status === 401) return;
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const rows = await r.json();
+        renderMovements(rows);
+        $('#loadAllMovementsBtn').hidden = movementsLoadAll;
+        $('#loadRecentMovementsBtn').hidden = !movementsLoadAll;
+        $('#movementsCount').textContent = movementsLoadAll
+            ? `Загружено: ${rows.length}`
+            : `Последние ${rows.length} из журнала`;
+    } finally {
+        setTableBusy(wrap, false);
+        finishLoading();
+    }
+}
+
+function renderMovements(rows) {
+    const tbody = $('#tableMovements tbody');
+    const groups = new Map();
+    rows.forEach(m => {
+        const key = movementDateKey(m.eventDate);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(m);
+    });
+    let html = '';
+    for (const [date, items] of groups) {
+        html += `<tr class="movement-date-row"><td colspan="8">${escapeHtml(date)} <span>${items.length} ${items.length === 1 ? 'перемещение' : 'перемещений'}</span></td></tr>`;
+        html += items.map(m => `<tr>
+            <td>${escapeHtml(formatDateTime(m.createdAt || m.eventDate))}</td>
+            <td><button type="button" class="btn-link" data-open-movement-device="${m.deviceId}">${escapeHtml(m.name || ('Прибор #' + m.deviceId))}</button></td>
+            <td>${escapeHtml(m.serialNumber || '—')}</td>
+            <td>${escapeHtml(m.eventType || '—')}</td>
+            <td>${escapeHtml(m.fromPlace || '—')}</td>
+            <td>${escapeHtml(m.toPlace || '—')}</td>
+            <td>${escapeHtml(m.note || '—')}</td>
+            <td>${escapeHtml(m.createdBy || '—')}</td>
+        </tr>`).join('');
+    }
+    tbody.innerHTML = html;
+    $('#emptyMovements').hidden = rows.length !== 0;
+}
+
+$('#loadAllMovementsBtn')?.addEventListener('click', () => loadMovements(true).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error')));
+$('#loadRecentMovementsBtn')?.addEventListener('click', () => loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error')));
+$('#searchMovements')?.addEventListener('input', () => {
+    clearTimeout(movementsSearchTimer);
+    movementsSearchTimer = setTimeout(() => loadMovements(movementsLoadAll).catch(e => showToast('Ошибка поиска', e.message, 'error')), 250);
+});
+$('#tableMovements')?.addEventListener('click', e => {
+    const btn = e.target.closest('[data-open-movement-device]');
+    if (!btn) return;
+    const id = Number(btn.dataset.openMovementDevice);
+    const device = state.devices.find(d => Number(d.id) === id);
+    if (device) openViewModal(device);
+    else showToast('Прибор', 'Откройте вкладку «Все приборы» и найдите прибор по ID ' + id, 'info');
+});
+
 async function renderAuditTab(limit = 200) {
     if (!state.user) return;
     const wrap = document.getElementById('auditTableWrap');
@@ -544,6 +623,7 @@ function switchTab(tabName) {
     if (!state.user) return;
     if (tabName === 'users' && state.user.role !== 'admin') { window.location.hash = 'all'; return; }
     if (tabName === 'audit') renderAuditTab(200);
+    if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
     if (tabName === 'trash') renderTrashTab();
     if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
     if (tabName === 'documents') {
@@ -566,7 +646,7 @@ async function handleAppRoute() {
         return;
     }
 
-    const allowedTabs = ['all', 'documents', 'audit', 'trash', 'help', 'users'];
+    const allowedTabs = ['all', 'documents', 'movements', 'audit', 'trash', 'help', 'users'];
     switchTab(allowedTabs.includes(hash) ? hash : 'all');
 }
 

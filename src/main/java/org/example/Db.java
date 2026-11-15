@@ -156,6 +156,8 @@ public class Db {
                     created_at TEXT NOT NULL
                 );
                 """);
+            s.execute("CREATE INDEX IF NOT EXISTS idx_device_movements_created ON device_movements(event_date DESC, created_at DESC, id DESC)");
+
             s.execute("""
                 CREATE TABLE IF NOT EXISTS device_document_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1071,6 +1073,51 @@ public class Db {
                 c.setAutoCommit(true);
             }
         }
+    }
+
+    public static JSONArray getMovements(String search, int limit) throws SQLException {
+        JSONArray result = new JSONArray();
+        String q = search == null ? "" : search.trim().toLowerCase();
+        String sql = """
+                SELECT m.id, m.device_id, d.name, d.serial_number, m.event_date, m.event_type,
+                       m.from_place, m.to_place, m.note, m.created_by, m.created_at
+                FROM device_movements m
+                LEFT JOIN devices d ON d.id = m.device_id
+                WHERE (? = '' OR
+                       lower(coalesce(d.name,'')) LIKE ? OR
+                       lower(coalesce(d.serial_number,'')) LIKE ? OR
+                       lower(coalesce(m.event_type,'')) LIKE ? OR
+                       lower(coalesce(m.from_place,'')) LIKE ? OR
+                       lower(coalesce(m.to_place,'')) LIKE ? OR
+                       lower(coalesce(m.note,'')) LIKE ? OR
+                       lower(coalesce(m.created_by,'')) LIKE ? OR
+                       cast(m.device_id AS TEXT) LIKE ?)
+                ORDER BY m.event_date DESC, m.created_at DESC, m.id DESC
+                """ + (limit > 0 ? " LIMIT ?" : "");
+        try (Connection c = DriverManager.getConnection(DB_URL);
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            String like = "%" + q + "%";
+            ps.setString(1, q);
+            for (int i = 2; i <= 9; i++) ps.setString(i, like);
+            if (limit > 0) ps.setInt(10, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.put(new JSONObject()
+                            .put("id", rs.getLong("id"))
+                            .put("deviceId", rs.getLong("device_id"))
+                            .put("name", rs.getString("name") == null ? "" : rs.getString("name"))
+                            .put("serialNumber", rs.getString("serial_number") == null ? "" : rs.getString("serial_number"))
+                            .put("eventDate", rs.getString("event_date") == null ? "" : rs.getString("event_date"))
+                            .put("eventType", rs.getString("event_type") == null ? "" : rs.getString("event_type"))
+                            .put("fromPlace", rs.getString("from_place") == null ? "" : rs.getString("from_place"))
+                            .put("toPlace", rs.getString("to_place") == null ? "" : rs.getString("to_place"))
+                            .put("note", rs.getString("note") == null ? "" : rs.getString("note"))
+                            .put("createdBy", rs.getString("created_by") == null ? "" : rs.getString("created_by"))
+                            .put("createdAt", rs.getString("created_at") == null ? "" : rs.getString("created_at")));
+                }
+            }
+        }
+        return result;
     }
 
     public static JSONArray getDeviceMovementHistory(long deviceId) throws SQLException {
