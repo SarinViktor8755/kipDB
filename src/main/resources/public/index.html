@@ -82,12 +82,31 @@
                     <th><input class="col-filter" data-col="sensorType"           list="col-dl-sensorType"           type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="scale"                list="col-dl-scale"                type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="category"             list="col-dl-category"             type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="lastVerification"     list="col-dl-lastVerification"     type="search" placeholder="дд.мм.гггг"></th>
+                    <th>
+                        <select class="col-sort" data-col="lastVerification">
+                            <option value="">— все —</option>
+                            <option value="desc">Сначала новые</option>
+                            <option value="asc">Сначала старые</option>
+                        </select>
+                    </th>
                     <th><input class="col-filter" data-col="mpi"                  list="col-dl-mpi"                  type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="nextVerification"     list="col-dl-nextVerification"     type="search" placeholder="дд.мм.гггг"></th>
+                    <th>
+                        <!-- По умолчанию: ближайшие даты следующей поверки сверху -->
+                        <select class="col-sort" data-col="nextVerification">
+                            <option value="">— все —</option>
+                            <option value="asc" selected>Сначала ближайшие</option>
+                            <option value="desc">Сначала дальние</option>
+                        </select>
+                    </th>
                     <th><input class="col-filter" data-col="accuracyClass"        list="col-dl-accuracyClass"        type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="redLine"              list="col-dl-redLine"              type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="writeOff"             list="col-dl-writeOff"             type="search" placeholder="дд.мм.гггг"></th>
+                    <th>
+                        <select class="col-sort" data-col="writeOff">
+                            <option value="">— все —</option>
+                            <option value="desc">Сначала новые</option>
+                            <option value="asc">Сначала старые</option>
+                        </select>
+                    </th>
                     <th><input class="col-filter" data-col="deferredVerification" list="col-dl-deferredVerification" type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="movement"             list="col-dl-movement"             type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="rowNumber"            list="col-dl-rowNumber"            type="search" placeholder="Фильтр…"></th>
@@ -297,9 +316,11 @@
                     <ul>
                         <li>Введите часть наименования, заводского номера или позиции в поле поиска. Список отфильтруется по мере ввода.</li>
                         <li>Под каждым заголовком столбца находится поле фильтра — можно сузить выборку по конкретному столбцу (как в Excel).</li>
-                        <li>При фокусе на поле фильтра или вводе первых символов выпадает список существующих значений этого столбца.</li>
+                        <li>Для столбцов с датами (<b>Дата поверки</b>, <b>Дата следующей поверки</b>, <b>Списание</b>) вместо текстового фильтра доступен выпадающий список сортировки: <b>«Сначала ближайшие»</b> или <b>«Сначала дальние»</b>.</li>
+                        <li><b>По умолчанию</b> приборы отсортированы по дате следующей поверки по возрастанию: ближайшие (а значит, и просроченные) — сверху. Приборы без указанной даты — в конце списка.</li>
+                        <li>При фокусе на текстовом поле фильтра выпадает список существующих значений этого столбца.</li>
                         <li>Фильтры по столбцам работают совместно с глобальным поиском (условие «И»).</li>
-                        <li>Для сброса всех фильтров по столбцам нажмите «✕ Сбросить фильтры».</li>
+                        <li>Для сброса всех фильтров и возврата к сортировке по умолчанию нажмите «✕ Сбросить фильтры».</li>
                     </ul>
                     <h3>Добавление прибора</h3>
                     <ol>

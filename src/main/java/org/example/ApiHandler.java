@@ -432,10 +432,22 @@ public class ApiHandler implements HttpHandler {
     }
 
     private void listDevices(HttpExchange ex) throws IOException, SQLException {
+        // ETag вычисляется по ревизии SQLite, а не по времени запроса.
+        // Триггеры БД меняют её при создании, редактировании, удалении и восстановлении прибора.
+        String etag = "\"devices-" + Db.getDevicesRevision() + "\"";
+        ex.getResponseHeaders().set("ETag", etag);
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        String clientTag = ex.getRequestHeaders().getFirst("If-None-Match");
+        if (etag.equals(clientTag)) {
+            ex.sendResponseHeaders(304, -1);
+            ex.close();
+            return;
+        }
+
         List<Device> devices = Db.getAllDevices();
         JSONArray arr = new JSONArray();
         for (Device d : devices) arr.put(toJson(d));
-        // Основной массив — самый большой ответ, сжимаем.
+        // Основной массив — самый большой ответ, сжимаем. ETag сохраняется и при gzip.
         sendJsonGzip(ex, 200, arr);
     }
 

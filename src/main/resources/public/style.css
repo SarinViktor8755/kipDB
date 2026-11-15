@@ -197,8 +197,28 @@ table.instruments-table .col-filter::-webkit-search-cancel-button:hover { opacit
 table.instruments-table tbody tr { cursor: pointer; }
 table.instruments-table tbody tr:hover { background: rgba(59,130,246,.12); }
 
+/* Выпадающие сортировки по датам в шапке */
+table.instruments-table .col-sort {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color .15s, box-shadow .15s;
+    appearance: auto;
+}
+table.instruments-table .col-sort:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
 @media (max-width: 900px) {
-    table.instruments-table { min-width: 900px; }
+    table.instruments-table { min-width: 1000px; }
 }
 
 table.devices {

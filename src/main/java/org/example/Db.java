@@ -82,14 +82,15 @@ public class Db {
             s.execute("PRAGMA foreign_keys=ON;");
             s.execute("PRAGMA busy_timeout = 5000;");
 
+            // Для новых баз поля дат создаются с типом DATE.
             s.execute("""
                 CREATE TABLE IF NOT EXISTS devices (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     serial_number TEXT,
                     name TEXT NOT NULL,
                     location TEXT,
-                    last_verification TEXT,
-                    next_verification TEXT,
+                    last_verification DATE,
+                    next_verification DATE,
                     photo_path TEXT,
                     photo_thumb_path TEXT,
                     is_deleted INTEGER DEFAULT 0,
@@ -98,7 +99,7 @@ public class Db {
                 );
                 """);
 
-            // Миграции для старых баз
+            // Миграции для старых баз (добавление новых колонок).
             try { s.execute("ALTER TABLE devices ADD COLUMN photo_thumb_path TEXT"); } catch (SQLException ignored) {}
             try { s.execute("ALTER TABLE devices ADD COLUMN serial_number TEXT"); } catch (SQLException ignored) {}
             try { s.execute("ALTER TABLE devices ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch (SQLException ignored) {}
@@ -110,6 +111,10 @@ public class Db {
             try {
                 s.execute("UPDATE devices SET created_at = datetime('now') WHERE created_at IS NULL");
             } catch (SQLException ignored) {}
+
+            // ===== Миграция типов last_verification / next_verification на DATE =====
+            // SQLite не поддерживает ALTER COLUMN TYPE, поэтому пересоздаём таблицу.
+            migrateDateColumnsToDateType(s);
 
             s.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
@@ -142,7 +147,7 @@ public class Db {
                 CREATE TABLE IF NOT EXISTS device_movements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id INTEGER NOT NULL,
-                    event_date TEXT NOT NULL,
+                    event_date DATE NOT NULL,
                     event_type TEXT NOT NULL,
                     from_place TEXT,
                     to_place TEXT,
@@ -159,7 +164,7 @@ public class Db {
                     document_title TEXT NOT NULL,
                     document_number TEXT,
                     event_type TEXT NOT NULL,
-                    event_date TEXT NOT NULL,
+                    event_date DATE NOT NULL,
                     created_by TEXT,
                     created_at TEXT NOT NULL
                 );
@@ -211,9 +216,130 @@ public class Db {
                 }
             }
         }
+        // Версия общего набора приборов для HTTP ETag. Триггеры отслеживают
+        // любые INSERT/UPDATE/DELETE, включая изменения из других методов приложения.
+        try (Connection meta = DriverManager.getConnection(DB_URL);
+             Statement ms = meta.createStatement()) {
+            ms.execute("CREATE TABLE IF NOT EXISTS app_meta (meta_key TEXT PRIMARY KEY, meta_value INTEGER NOT NULL)");
+            ms.execute("INSERT OR IGNORE INTO app_meta(meta_key, meta_value) VALUES ('devices_revision', 1)");
+            ms.execute("""
+                CREATE TRIGGER IF NOT EXISTS devices_revision_insert
+                AFTER INSERT ON devices BEGIN
+                    UPDATE app_meta SET meta_value = meta_value + 1 WHERE meta_key = 'devices_revision';
+                END;
+                """);
+            ms.execute("""
+                CREATE TRIGGER IF NOT EXISTS devices_revision_update
+                AFTER UPDATE ON devices BEGIN
+                    UPDATE app_meta SET meta_value = meta_value + 1 WHERE meta_key = 'devices_revision';
+                END;
+                """);
+            ms.execute("""
+                CREATE TRIGGER IF NOT EXISTS devices_revision_delete
+                AFTER DELETE ON devices BEGIN
+                    UPDATE app_meta SET meta_value = meta_value + 1 WHERE meta_key = 'devices_revision';
+                END;
+                """);
+        }
         //importSampleDevicesIfEmpty();
         //    migrateLegacyMovementHistory();
         //seedCurrentDocumentHistory();
+    }
+
+    /** Текущая ревизия списка приборов; меняется SQLite-триггерами при любой модификации. */
+    public static long getDevicesRevision() throws SQLException {
+        try (Connection c = DriverManager.getConnection(DB_URL);
+             PreparedStatement ps = c.prepareStatement("SELECT meta_value FROM app_meta WHERE meta_key='devices_revision'");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getLong(1) : 1L;
+        }
+    }
+
+    /**
+     * Меняет тип колонок last_verification и next_verification на DATE.
+     * SQLite не поддерживает ALTER COLUMN TYPE, поэтому таблица пересоздаётся.
+     * Миграция идемпотентна: если колонки уже имеют тип DATE — ничего не делает.
+     */
+    private static void migrateDateColumnsToDateType(Statement s) throws SQLException {
+        boolean needMigration = false;
+        try (ResultSet rs = s.executeQuery("PRAGMA table_info(devices)")) {
+            while (rs.next()) {
+                String colName = rs.getString("name");
+                String colType = rs.getString("type");
+                if (("last_verification".equalsIgnoreCase(colName)
+                        || "next_verification".equalsIgnoreCase(colName))
+                        && colType != null
+                        && !"DATE".equalsIgnoreCase(colType)) {
+                    needMigration = true;
+                    break;
+                }
+            }
+        }
+
+        if (!needMigration) return;
+
+        System.out.println("Миграция: смена типа last_verification / next_verification на DATE...");
+
+        try { s.execute("PRAGMA foreign_keys=OFF;"); } catch (SQLException ignored) {}
+        s.execute("BEGIN TRANSACTION;");
+        try {
+            s.execute("ALTER TABLE devices RENAME TO devices_old;");
+
+            s.execute("""
+                CREATE TABLE devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    serial_number TEXT,
+                    name TEXT NOT NULL,
+                    location TEXT,
+                    last_verification DATE,
+                    next_verification DATE,
+                    photo_path TEXT,
+                    photo_thumb_path TEXT,
+                    is_deleted INTEGER DEFAULT 0,
+                    version INTEGER DEFAULT 1,
+                    created_at TEXT,
+                    details_json TEXT NOT NULL DEFAULT '{}'
+                );
+                """);
+
+            // Копируем данные. Пустые строки превращаем в NULL,
+            // чтобы новый тип DATE работал корректно (ORDER BY ... IS NULL и т.д.).
+            s.execute("""
+                INSERT INTO devices (
+                    id, serial_number, name, location, last_verification, next_verification,
+                    photo_path, photo_thumb_path, is_deleted, version, created_at, details_json
+                )
+                SELECT
+                    id, serial_number, name, location,
+                    CASE WHEN last_verification IS NULL OR TRIM(last_verification) = '' THEN NULL
+                         ELSE last_verification END,
+                    CASE WHEN next_verification IS NULL OR TRIM(next_verification) = '' THEN NULL
+                         ELSE next_verification END,
+                    photo_path, photo_thumb_path, is_deleted, version, created_at, details_json
+                FROM devices_old;
+                """);
+
+            s.execute("DROP TABLE devices_old;");
+            s.execute("COMMIT;");
+            System.out.println("Миграция типов дат выполнена успешно.");
+        } catch (SQLException e) {
+            try { s.execute("ROLLBACK;"); } catch (SQLException ignored) {}
+            throw e;
+        } finally {
+            try { s.execute("PRAGMA foreign_keys=ON;"); } catch (SQLException ignored) {}
+        }
+    }
+
+    /**
+     * Записывает строку как дату или NULL. Пустые/пробельные значения → NULL,
+     * чтобы DATE-колонка вела себя корректно (в т.ч. в ORDER BY ... IS NULL).
+     */
+    private static void setDateOrNull(PreparedStatement ps, int index, String value) throws SQLException {
+        if (value == null || value.trim().isEmpty()) {
+            ps.setNull(index, Types.VARCHAR);
+        } else {
+            ps.setString(index, value.trim());
+        }
     }
 
     // Переносим старый текстовый столбец «Движение» в отдельные события, сохраняя исходные формулировки.
@@ -287,8 +413,10 @@ public class Db {
                 for (int i=0; i<rows.length(); i++) {
                     JSONObject row = rows.getJSONObject(i);
                     ps.setString(1,row.optString("serialNumber","")); ps.setString(2,row.optString("name","Прибор"));
-                    ps.setString(3,row.optString("location","")); ps.setString(4,row.optString("lastVerification",""));
-                    ps.setString(5,row.optString("nextVerification","")); ps.setString(6,now);
+                    ps.setString(3,row.optString("location",""));
+                    setDateOrNull(ps, 4, row.optString("lastVerification",""));
+                    setDateOrNull(ps, 5, row.optString("nextVerification",""));
+                    ps.setString(6,now);
                     ps.setString(7,row.getJSONObject("details").toString()); ps.addBatch();
                 }
                 ps.executeBatch(); c.commit();
@@ -380,8 +508,12 @@ public class Db {
         try (Connection c = DriverManager.getConnection(DB_URL);
              Statement s = c.createStatement();
              ResultSet rs = s.executeQuery(
+                     // Сортировка по умолчанию: ближайшие даты следующей поверки — сверху,
+                     // пустые (NULL) — в самом конце. Это гарантирует, что пользователь
+                     // сразу увидит приборы, требующие внимания.
                      "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at, details_json " +
-                             "FROM devices WHERE is_deleted = 0 ORDER BY next_verification ASC")) {
+                             "FROM devices WHERE is_deleted = 0 " +
+                             "ORDER BY next_verification IS NULL, next_verification ASC, id ASC")) {
             while (rs.next()) result.add(readDevice(rs));
         }
         return result;
@@ -433,8 +565,8 @@ public class Db {
                     ps.setString(1, d.serialNumber);
                     ps.setString(2, d.name);
                     ps.setString(3, d.location);
-                    ps.setString(4, d.lastVerification);
-                    ps.setString(5, d.nextVerification);
+                    setDateOrNull(ps, 4, d.lastVerification);
+                    setDateOrNull(ps, 5, d.nextVerification);
                     ps.setString(6, d.photoPath);
                     ps.setString(7, d.photoThumbPath);
                     ps.setString(8, now);
@@ -487,17 +619,20 @@ public class Db {
                     finalPhotoThumb = (d.photoThumbPath == null) ? old.photoThumbPath : d.photoThumbPath;
                 }
 
+                String effectiveDetailsJson = (d.detailsJson == null || d.detailsJson.isBlank() || "{}".equals(d.detailsJson.trim()))
+                        ? (old.detailsJson == null ? "{}" : old.detailsJson) : d.detailsJson;
+
                 try (PreparedStatement ps = c.prepareStatement(
                         "UPDATE devices SET serial_number=?, name=?, location=?, last_verification=?, " +
                                 "next_verification=?, photo_path=?, photo_thumb_path=?, details_json=?, version = version + 1 WHERE id=? AND version=?")) {
                     ps.setString(1, d.serialNumber);
                     ps.setString(2, d.name);
                     ps.setString(3, d.location);
-                    ps.setString(4, d.lastVerification);
-                    ps.setString(5, d.nextVerification);
+                    setDateOrNull(ps, 4, d.lastVerification);
+                    setDateOrNull(ps, 5, d.nextVerification);
                     ps.setString(6, finalPhotoPath);
                     ps.setString(7, finalPhotoThumb);
-                    ps.setString(8, (d.detailsJson == null || "{}".equals(d.detailsJson)) ? old.detailsJson : d.detailsJson);
+                    ps.setString(8, effectiveDetailsJson);
                     ps.setLong(9, d.id);
                     ps.setInt(10, old.version);
                     int updated = ps.executeUpdate();
@@ -507,16 +642,17 @@ public class Db {
                     }
                 }
 
+                // Журналируем не только базовые колонки, но и ВСЕ дополнительные поля,
+                // которые хранятся в details_json (шкала, тип датчика, класс точности и т.д.).
                 StringBuilder details = new StringBuilder();
-                appendIfChanged(details, "serial_number", old.serialNumber, d.serialNumber);
-                appendIfChanged(details, "name", old.name, d.name);
-                appendIfChanged(details, "location", old.location, d.location);
-                appendIfChangedDate(details, "last_verification", old.lastVerification, d.lastVerification);
-                appendIfChangedDate(details, "next_verification", old.nextVerification, d.nextVerification);
-
-                if (clearPhoto) {
-                    details.append(details.length() > 0 ? "; " : "").append("photo: удалено");
-                }
+                appendIfChanged(details, "Заводской номер", old.serialNumber, d.serialNumber);
+                appendIfChanged(details, "Наименование", old.name, d.name);
+                appendIfChanged(details, "Место установки", old.location, d.location);
+                appendIfChangedDate(details, "Дата последней поверки", old.lastVerification, d.lastVerification);
+                appendIfChangedDate(details, "Дата следующей поверки", old.nextVerification, d.nextVerification);
+                appendIfChanged(details, "Фото", old.photoPath, finalPhotoPath);
+                appendIfChanged(details, "Миниатюра фото", old.photoThumbPath, finalPhotoThumb);
+                appendChangedJsonFields(details, old.detailsJson, effectiveDetailsJson);
 
                 log(c, d.id, user, "UPDATE", details.length() == 0 ? "no changes" : details.toString());
                 c.commit();
@@ -676,16 +812,16 @@ public class Db {
                         while (dr.next()) {
                             Device d = readDevice(dr);
                             devices.put(new JSONObject()
-                                .put("id", d.id)
-                                .put("name", d.name == null ? "" : d.name)
-                                .put("serialNumber", d.serialNumber == null ? "" : d.serialNumber)
-                                .put("location", d.location == null ? "" : d.location)
-                                .put("lastVerification", d.lastVerification == null ? "" : d.lastVerification)
-                                .put("nextVerification", d.nextVerification == null ? "" : d.nextVerification)
-                                .put("photoPath", d.photoPath == null ? JSONObject.NULL : d.photoPath)
-                                .put("photoThumbPath", d.photoThumbPath == null ? JSONObject.NULL : d.photoThumbPath)
-                                .put("version", d.version)
-                                .put("createdAt", d.createdAt == null ? "" : d.createdAt));
+                                    .put("id", d.id)
+                                    .put("name", d.name == null ? "" : d.name)
+                                    .put("serialNumber", d.serialNumber == null ? "" : d.serialNumber)
+                                    .put("location", d.location == null ? "" : d.location)
+                                    .put("lastVerification", d.lastVerification == null ? "" : d.lastVerification)
+                                    .put("nextVerification", d.nextVerification == null ? "" : d.nextVerification)
+                                    .put("photoPath", d.photoPath == null ? JSONObject.NULL : d.photoPath)
+                                    .put("photoThumbPath", d.photoThumbPath == null ? JSONObject.NULL : d.photoThumbPath)
+                                    .put("version", d.version)
+                                    .put("createdAt", d.createdAt == null ? "" : d.createdAt));
                         }
                     }
                 }
@@ -697,13 +833,13 @@ public class Db {
 
     private static JSONObject documentJson(ResultSet rs, boolean includeFields) throws SQLException {
         JSONObject o = new JSONObject()
-            .put("id", rs.getLong("id"))
-            .put("title", rs.getString("title"))
-            .put("documentNumber", rs.getString("document_number") == null ? "" : rs.getString("document_number"))
-            .put("description", rs.getString("description") == null ? "" : rs.getString("description"))
-            .put("createdAt", rs.getString("created_at"))
-            .put("updatedAt", rs.getString("updated_at") == null ? "" : rs.getString("updated_at"))
-            .put("deviceCount", rs.getInt("device_count"));
+                .put("id", rs.getLong("id"))
+                .put("title", rs.getString("title"))
+                .put("documentNumber", rs.getString("document_number") == null ? "" : rs.getString("document_number"))
+                .put("description", rs.getString("description") == null ? "" : rs.getString("description"))
+                .put("createdAt", rs.getString("created_at"))
+                .put("updatedAt", rs.getString("updated_at") == null ? "" : rs.getString("updated_at"))
+                .put("deviceCount", rs.getInt("device_count"));
         if (includeFields) {
             try { o.put("customFields", new JSONObject(rs.getString("custom_fields_json"))); }
             catch (Exception e) { o.put("customFields", new JSONObject()); }
@@ -971,7 +1107,15 @@ public class Db {
             c.setAutoCommit(false);
             try {
                 try (PreparedStatement ps = c.prepareStatement("INSERT INTO device_movements(device_id,event_date,event_type,from_place,to_place,note,created_by,created_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND is_deleted=0)")) {
-                    ps.setLong(1,deviceId); ps.setString(2,eventDate); ps.setString(3,eventType); ps.setString(4,fromPlace); ps.setString(5,toPlace); ps.setString(6,note); ps.setString(7,user); ps.setString(8,LocalDateTime.now().format(DB_DATE_FORMAT)); ps.setLong(9,deviceId);
+                    ps.setLong(1,deviceId);
+                    setDateOrNull(ps, 2, eventDate);
+                    ps.setString(3,eventType);
+                    ps.setString(4,fromPlace);
+                    ps.setString(5,toPlace);
+                    ps.setString(6,note);
+                    ps.setString(7,user);
+                    ps.setString(8,LocalDateTime.now().format(DB_DATE_FORMAT));
+                    ps.setLong(9,deviceId);
                     if (ps.executeUpdate()==0) throw new SQLException("Прибор не найден");
                 }
                 // Для операций установки обновляем текущую позицию прибора.
@@ -1027,6 +1171,54 @@ public class Db {
             ps.setString(4, action);
             ps.setString(5, details);
             ps.executeUpdate();
+        }
+    }
+
+    private static void appendChangedJsonFields(StringBuilder sb, String oldJson, String newJson) {
+        JSONObject oldObject;
+        JSONObject newObject;
+        try { oldObject = new JSONObject(oldJson == null || oldJson.isBlank() ? "{}" : oldJson); }
+        catch (Exception ignored) { oldObject = new JSONObject(); }
+        try { newObject = new JSONObject(newJson == null || newJson.isBlank() ? "{}" : newJson); }
+        catch (Exception ignored) { newObject = new JSONObject(); }
+
+        Set<String> keys = new LinkedHashSet<>();
+        oldObject.keySet().forEach(keys::add);
+        newObject.keySet().forEach(keys::add);
+        for (String key : keys) {
+            Object oldValue = oldObject.has(key) ? oldObject.opt(key) : JSONObject.NULL;
+            Object newValue = newObject.has(key) ? newObject.opt(key) : JSONObject.NULL;
+            String oldText = auditValue(oldValue);
+            String newText = auditValue(newValue);
+            if (!oldText.equals(newText)) {
+                appendIfChanged(sb, deviceFieldLabel(key), oldText, newText);
+            }
+        }
+    }
+
+    private static String auditValue(Object value) {
+        if (value == null || value == JSONObject.NULL) return "";
+        if (value instanceof JSONObject || value instanceof JSONArray) return value.toString();
+        return String.valueOf(value);
+    }
+
+    private static String deviceFieldLabel(String key) {
+        switch (key) {
+            case "sensorType": return "Тип датчика";
+            case "unit": return "Единица измерения";
+            case "scaleMin": return "Минимальная шкала";
+            case "scaleMax": return "Максимальная шкала";
+            case "category": return "Категория";
+            case "mpi": return "МПИ";
+            case "accuracyClass": return "Класс точности";
+            case "redLine": return "Красная черта";
+            case "writeOff": return "Списание";
+            case "deferredVerification": return "Отсрочка поверки";
+            case "movement": return "Движение";
+            case "rowNumber": return "Номер строки";
+            case "groupName": return "Группа";
+            case "positionName": return "Позиционное обозначение";
+            default: return key;
         }
     }
 

@@ -14,6 +14,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
+
+        <!-- По умолчанию тесты НЕ компилируются и НЕ запускаются.
+             Активируется профилем "with-tests" или -DskipTests=false. -->
+        <skipTests>true</skipTests>
+        <maven.test.skip>true</maven.test.skip>
     </properties>
 
     <dependencies>
@@ -76,4 +81,40 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            ПРОФИЛЬ ПО УМОЛЧАНИЮ.
+            При сборке: mvn clean package  (или просто package в IDEA)
+            Тесты НЕ компилируются и НЕ запускаются.
+            Собирается target/kip.jar — fat JAR со всеми зависимостями.
+        -->
+        <profile>
+            <id>prod</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <skipTests>true</skipTests>
+                <maven.test.skip>true</maven.test.skip>
+            </properties>
+        </profile>
+
+        <!--
+            ПРОФИЛЬ ДЛЯ ЗАПУСКА ТЕСТОВ.
+            Включить: mvn clean package -Pwith-tests
+            или       mvn test -Pwith-tests
+            Или можно временно отключить prod-профиль:
+                      mvn clean package -P!prod
+            ВНИМАНИЕ: StressTest и Stress2 обращаются к реальной kip.db.
+            Перед запуском сделайте бэкап kip.db.
+        -->
+        <profile>
+            <id>with-tests</id>
+            <properties>
+                <skipTests>false</skipTests>
+                <maven.test.skip>false</maven.test.skip>
+            </properties>
+        </profile>
+    </profiles>
 </project>

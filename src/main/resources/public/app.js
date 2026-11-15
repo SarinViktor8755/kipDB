@@ -1,6 +1,43 @@
 /* =========================================================
  *  Состояние приложения
  * ========================================================= */
+const DEVICE_CACHE_KEY = 'kip.devices.cache.v1';
+let deviceCacheEtag = null;
+let deviceCacheRestored = false;
+
+function restoreDeviceCache() {
+    if (deviceCacheRestored) return state.devices.length > 0;
+    deviceCacheRestored = true;
+    try {
+        const raw = localStorage.getItem(DEVICE_CACHE_KEY);
+        if (!raw) return false;
+        const cached = JSON.parse(raw);
+        if (!cached || typeof cached.etag !== 'string' || !Array.isArray(cached.data)) {
+            localStorage.removeItem(DEVICE_CACHE_KEY);
+            return false;
+        }
+        deviceCacheEtag = cached.etag;
+        state.devices = cached.data;
+        return true;
+    } catch (e) {
+        // Недоступное хранилище/повреждённый кеш не мешают обычной загрузке с сервера.
+        deviceCacheEtag = null;
+        state.devices = [];
+        return false;
+    }
+}
+
+function persistDeviceCache(etag, data) {
+    if (!etag || !Array.isArray(data)) return;
+    deviceCacheEtag = etag;
+    try {
+        localStorage.setItem(DEVICE_CACHE_KEY, JSON.stringify({ etag, data }));
+    } catch (e) {
+        // При переполнении localStorage приложение продолжает работать без постоянного кеша.
+        try { localStorage.removeItem(DEVICE_CACHE_KEY); } catch (_) {}
+    }
+}
+
 const state = {
     selectedDocumentDeviceId: null,
     devices: [],
@@ -10,7 +47,10 @@ const state = {
     currentDocument: null,
     users: [],
     user: null,
-    columnFilters: {}
+    columnFilters: {}, // текстовые фильтры: { col: 'строка' }
+    // Сортировки по столбцам.
+    // По умолчанию «Дата следующей поверки» — ASC: ближайшие поверки сверху.
+    columnSorts: { nextVerification: 'asc' }
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -226,12 +266,9 @@ function cellValueForColumn(d, col) {
         case 'sensorType':           return d.sensorType || '';
         case 'scale':                return formatScale(d);
         case 'category':             return d.category || '';
-        case 'lastVerification':     return formatTableDate(d.lastVerification);
         case 'mpi':                  return d.mpi || '';
-        case 'nextVerification':     return formatTableDate(d.nextVerification);
         case 'accuracyClass':        return d.accuracyClass || '';
         case 'redLine':              return d.redLine || '';
-        case 'writeOff':             return formatTableDate(d.writeOff);
         case 'deferredVerification': return d.deferredVerification || '';
         case 'movement':             return d.movement || '';
         case 'rowNumber':            return d.rowNumber || '';
@@ -244,8 +281,7 @@ function cellValueForColumn(d, col) {
 function populateColumnDatalists() {
     const columns = [
         'serialNumber', 'location', 'sensorType', 'scale', 'category',
-        'lastVerification', 'mpi', 'nextVerification', 'accuracyClass',
-        'redLine', 'writeOff', 'deferredVerification', 'movement',
+        'mpi', 'accuracyClass', 'redLine', 'deferredVerification', 'movement',
         'rowNumber', 'groupName', 'positionName'
     ];
 
@@ -287,6 +323,13 @@ async function loadAll() {
     const wrap = document.getElementById('devicesTableWrap');
     const tbody = document.querySelector('#tableAll tbody');
 
+    // Сначала мгновенно показываем последний сохранённый список, не ожидая сеть.
+    const hadCache = restoreDeviceCache();
+    if (hadCache) {
+        render();
+        updateDatalists();
+    }
+
     beginLoading();
     setTableBusy(wrap, true);
     if (!state.devices.length) renderSkeleton(tbody, 8, 16);
@@ -302,9 +345,14 @@ async function loadAll() {
 }
 
 async function loadDevices() {
-    const r = await apiFetch('/api/devices');
+    const headers = {};
+    if (deviceCacheEtag) headers['If-None-Match'] = deviceCacheEtag;
+    const r = await apiFetch('/api/devices', { headers });
+    if (r.status === 304) return; // список не изменился — оставляем данные из localStorage
     if (!r.ok) throw new Error('devices: ' + r.status);
-    state.devices = await r.json();
+    const data = await r.json();
+    state.devices = data;
+    persistDeviceCache(r.headers.get('ETag'), data);
 }
 
 async function loadStats() {
@@ -345,13 +393,22 @@ function formatScale(device) {
     return [min, max, unit].filter(Boolean).join(' ');
 }
 
+/* =========================================================
+ *  Таблица «Все приборы»
+ *
+ *  Сортировка:
+ *    1) Приоритет — выбранные пользователем сортировки (state.columnSorts).
+ *    2) Если пользователь не задал сортировку — по умолчанию идёт
+ *       ASC по nextVerification (ближайшие поверки сверху, пустые — в конце).
+ *       Это совпадает с ORDER BY в SQL (Db.getAllDevices),
+ *       поэтому порядок сохраняется даже после фильтрации на клиенте.
+ * ========================================================= */
 function renderAllTab() {
     const q = ($('#searchAll').value || '').toLowerCase().trim();
     const fEl = $('#statusFilter');
-    const sEl = $('#sortFilter');
     const f = fEl ? fEl.value : '';
-    const sort = sEl ? sEl.value : 'name_asc';
 
+    // Активные текстовые фильтры
     const activeCols = Object.entries(state.columnFilters)
         .filter(([, v]) => v && v.trim() !== '');
 
@@ -368,12 +425,29 @@ function renderAllTab() {
         return true;
     });
 
-    rows.sort((a,b) => {
-        if (sort === 'name_asc') return (a.positionName || a.name || '').localeCompare(b.positionName || b.name || '');
-        if (sort === 'name_desc') return (b.positionName || b.name || '').localeCompare(a.positionName || a.name || '');
-        if (sort === 'date_new') return (b.createdAt || '').localeCompare(a.createdAt || '');
-        if (sort === 'date_old') return (a.createdAt || '').localeCompare(b.createdAt || '');
-        return 0;
+    // Сортировка.
+    const hasExplicitSort = Object.values(state.columnSorts).some(v => v);
+    rows.sort((a, b) => {
+        if (hasExplicitSort) {
+            for (const [col, dir] of Object.entries(state.columnSorts)) {
+                if (!dir) continue;
+                const av = a[col] || '';
+                const bv = b[col] || '';
+                if (av === bv) continue;
+                // Пустые значения всегда в конце независимо от направления
+                if (!av) return 1;
+                if (!bv) return -1;
+                return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+            }
+        }
+        // Fallback: ближайшие даты следующей поверки сверху, пустые — в конце.
+        // ISO-даты (YYYY-MM-DD) корректно сравниваются как строки.
+        const an = a.nextVerification || '';
+        const bn = b.nextVerification || '';
+        if (!an && !bn) return 0;
+        if (!an) return 1;
+        if (!bn) return -1;
+        return an.localeCompare(bn);
     });
 
     $('#tableAll tbody').innerHTML = rows.map(d => `<tr data-id="${d.id}">
@@ -551,27 +625,17 @@ function applyRoleUI() {
     if (state.user) $('#userSelect').value = state.user.login;
 }
 
-/* =========================================================
- *  Неблокирующая инициализация:
- *  - сначала рисуем UI (гостевой режим, кнопки скрыты),
- *  - параллельно грузим список пользователей, сессию и данные,
- *  - по мере готовности — обновляем интерфейс.
- * ========================================================= */
 async function initializeAuth() {
-    // Сразу показываем UI, не блокируя страницу
     applyRoleUI();
-
-    // Индикатор загрузки на всё время инициализации
     beginLoading();
 
-    // Параллельно: пользователи, сессия, данные
     const usersPromise = fetch('/api/auth/users')
         .then(r => r.ok ? r.json() : [])
         .catch(() => []);
     const mePromise = fetch('/api/auth/me')
         .then(r => r.ok ? r.json() : null)
         .catch(() => null);
-    const dataPromise = loadAll().catch(() => {}); // тихо, если 401
+    const dataPromise = loadAll().catch(() => {});
 
     try {
         const [users, me] = await Promise.all([usersPromise, mePromise]);
@@ -582,13 +646,11 @@ async function initializeAuth() {
             state.user = me.user;
             applyRoleUI();
             await handleAppRoute();
-            // Данные уже могли прийти; если нет — дождёмся
             await dataPromise;
             if (!state.devices.length) {
                 await loadAll().catch(() => {});
             }
         } else {
-            // Гостевой вход — не блокирует отрисовку
             $('#userSelect').value = 'guest';
             await loginSelectedUser('').catch(() => {});
             await handleAppRoute();
@@ -930,8 +992,8 @@ $('#tableDocumentDevices').addEventListener('click', async e => {
  * ========================================================= */
 $('#searchAll').addEventListener('input', debounce(renderAllTab, 180));
 if ($('#statusFilter')) $('#statusFilter').addEventListener('change', renderAllTab);
-if ($('#sortFilter')) $('#sortFilter').addEventListener('change', renderAllTab);
 
+// Текстовые фильтры по столбцам
 $all('.col-filter').forEach(inp => {
     inp.addEventListener('input', debounce(() => {
         const col = inp.dataset.col;
@@ -942,11 +1004,30 @@ $all('.col-filter').forEach(inp => {
     }, 200));
 });
 
+// Выпадающие фильтры-сортировки по датам в шапке таблицы
+$all('.col-sort').forEach(sel => {
+    // Проставляем начальное значение из state, чтобы UI соответствовал логике
+    const col = sel.dataset.col;
+    if (state.columnSorts[col]) sel.value = state.columnSorts[col];
+
+    sel.addEventListener('change', () => {
+        const dir = sel.value;
+        if (dir) state.columnSorts[col] = dir;
+        else delete state.columnSorts[col];
+        renderAllTab();
+    });
+});
+
 const resetBtn = $('#resetColumnFiltersBtn');
 if (resetBtn) {
     resetBtn.addEventListener('click', () => {
         state.columnFilters = {};
+        // Возвращаем сортировку по умолчанию: ближайшие поверки сверху
+        state.columnSorts = { nextVerification: 'asc' };
         $all('.col-filter').forEach(inp => { inp.value = ''; });
+        $all('.col-sort').forEach(sel => {
+            sel.value = (sel.dataset.col === 'nextVerification') ? 'asc' : '';
+        });
         renderAllTab();
     });
 }
@@ -1361,7 +1442,5 @@ $('#viewPrintBtn').addEventListener('click', () => {
  *  СТАРТ
  * ========================================================= */
 document.addEventListener('DOMContentLoaded', () => {
-    // Страница уже отрисована (HTML/CSS загрузились),
-    // теперь в фоне подтягиваем сессию и данные.
     initializeAuth();
 });
