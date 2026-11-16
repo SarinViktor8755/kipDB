@@ -217,6 +217,19 @@ public class Db {
                     try (PreparedStatement upd = c.prepareStatement("UPDATE users SET display_name='Администратор', role='admin' WHERE login='Admin' COLLATE NOCASE")) { upd.executeUpdate(); }
                 }
             }
+            // Системная учётная запись гостя существует в каждой БД.
+            // Вход гостя остаётся без пароля, а случайный хеш не задаёт ему пароль для обычной авторизации.
+            try (PreparedStatement guest = c.prepareStatement("SELECT id FROM users WHERE login='guest' COLLATE NOCASE");
+                 ResultSet rs = guest.executeQuery()) {
+                if (!rs.next()) {
+                    try (PreparedStatement ins = c.prepareStatement("INSERT INTO users(login,display_name,password_hash,role) VALUES('guest','Гость',?,'guest')")) {
+                        ins.setString(1, AuthUtil.hash(java.util.UUID.randomUUID().toString()));
+                        ins.executeUpdate();
+                    }
+                } else {
+                    try (PreparedStatement upd = c.prepareStatement("UPDATE users SET display_name='Гость', role='guest' WHERE login='guest' COLLATE NOCASE")) { upd.executeUpdate(); }
+                }
+            }
         }
         // Версия общего набора приборов для HTTP ETag. Триггеры отслеживают
         // любые INSERT/UPDATE/DELETE, включая изменения из других методов приложения.
@@ -429,7 +442,7 @@ public class Db {
     public static JSONArray getUsersPublic() throws SQLException {
         JSONArray result = new JSONArray();
         try (Connection c = DriverManager.getConnection(DB_URL);
-             PreparedStatement ps = c.prepareStatement("SELECT id, login, display_name, role FROM users ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END, display_name COLLATE NOCASE");
+             PreparedStatement ps = c.prepareStatement("SELECT id, login, display_name, role FROM users ORDER BY CASE WHEN role='admin' THEN 0 WHEN role='guest' THEN 1 ELSE 2 END, display_name COLLATE NOCASE");
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) result.put(new JSONObject().put("id", rs.getLong("id")).put("login", rs.getString("login"))
                     .put("name", rs.getString("display_name")).put("role", rs.getString("role")));
@@ -488,7 +501,8 @@ public class Db {
                     }
                 }
                 // Основную учётную запись Admin нельзя удалить даже другим администратором.
-                if ("admin".equalsIgnoreCase(role) || "Admin".equalsIgnoreCase(login)) { c.rollback(); return false; }
+                if ("admin".equalsIgnoreCase(role) || "Admin".equalsIgnoreCase(login)
+                        || "guest".equalsIgnoreCase(role) || "guest".equalsIgnoreCase(login)) { c.rollback(); return false; }
                 try (PreparedStatement del = c.prepareStatement("DELETE FROM users WHERE id=?")) {
                     del.setLong(1, userId);
                     if (del.executeUpdate() == 0) { c.rollback(); return false; }

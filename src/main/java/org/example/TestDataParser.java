@@ -35,6 +35,14 @@ public final class TestDataParser {
     /** Формат ISO-даты для проверки перед записью в DATE-колонку */
     private static final Pattern ISO_DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
 
+    /** Имена для автора тестовых записей перемещений. */
+    private static final List<String> TEST_AUTHORS = List.of(
+            "Александр Иванов", "Дмитрий Петров", "Сергей Смирнов",
+            "Андрей Кузнецов", "Михаил Попов", "Алексей Соколов",
+            "Николай Волков", "Евгений Морозов", "Павел Новиков",
+            "Игорь Фёдоров", "Роман Павлов", "Максим Семёнов"
+    );
+
     // =====================================================================
     //  Структуры данных
     // =====================================================================
@@ -242,7 +250,7 @@ public final class TestDataParser {
                                 movPs.setString(4, emptyToNull(ev.from));
                                 movPs.setString(5, emptyToNull(ev.to));
                                 movPs.setString(6, ev.raw);
-                                movPs.setString(7, "Импорт из JSON");
+                                movPs.setString(7, randomTestAuthor());
                                 movPs.setString(8, created);
                                 movPs.executeUpdate();
                                 result.movementsInserted++;
@@ -260,6 +268,11 @@ public final class TestDataParser {
             }
         }
         return result;
+    }
+
+    private static String randomTestAuthor() {
+        return TEST_AUTHORS.get(java.util.concurrent.ThreadLocalRandom.current()
+                .nextInt(TEST_AUTHORS.size()));
     }
 
     public static final class ImportResult {

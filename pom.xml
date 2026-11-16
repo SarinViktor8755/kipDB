@@ -99,7 +99,16 @@
                 <maven.test.skip>true</maven.test.skip>
             </properties>
         </profile>
-        
+
+        <!--
+            ПРОФИЛЬ ДЛЯ ЗАПУСКА ТЕСТОВ.
+            Включить: mvn clean package -Pwith-tests
+            или       mvn test -Pwith-tests
+            Или можно временно отключить prod-профиль:
+                      mvn clean package -P!prod
+            ВНИМАНИЕ: StressTest и Stress2 обращаются к реальной kip.db.
+            Перед запуском сделайте бэкап kip.db.
+        -->
         <profile>
             <id>with-tests</id>
             <properties>

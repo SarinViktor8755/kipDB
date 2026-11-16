@@ -687,8 +687,12 @@ function fillUserSelect() {
     const select = $('#userSelect');
     if (!select) return;
     const current = state.user ? state.user.login : 'guest';
-    select.innerHTML = '<option value="guest">Гость (только просмотр)</option>' +
-        state.users.map(u => `<option value="${escapeHtml(u.login).replaceAll('"', '&quot;')}">${escapeHtml(u.name)}</option>`).join('');
+    // Гость уже приходит из /api/users как системная учётная запись.
+    // Не добавляем отдельный option вручную, иначе в списке будут два гостя.
+    select.innerHTML = state.users.map(u => {
+        const label = u.role === 'guest' ? 'Гость (только просмотр)' : u.name;
+        return `<option value="${escapeHtml(u.login).replaceAll('"', '&quot;')}">${escapeHtml(label)}</option>`;
+    }).join('');
     select.value = current;
 }
 
@@ -819,7 +823,7 @@ async function loadUsers() {
         if (r.status === 401) return;
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const users = await r.json();
-        tbody.innerHTML = users.map(u => `<tr><td>${escapeHtml(u.name)}</td><td>${u.role === 'admin' ? 'Администратор' : 'Пользователь'}</td><td>${u.role === 'admin' ? '<span class="muted">Защищённая учётная запись</span>' : `<button class="btn-danger btn-small" data-delete-user="${u.id}" data-user-name="${escapeHtml(u.name).replaceAll('\"','&quot;')}">Удалить</button>`}</td></tr>`).join('');
+        tbody.innerHTML = users.map(u => `<tr><td>${escapeHtml(u.name)}</td><td>${u.role === 'admin' ? 'Администратор' : u.role === 'guest' ? 'Гость · просмотр' : 'Пользователь'}</td><td>${u.role === 'admin' || u.role === 'guest' ? '<span class="muted">Системная учётная запись</span>' : `<button class="btn-danger btn-small" data-delete-user="${u.id}" data-user-name="${escapeHtml(u.name).replaceAll('"','&quot;')}">Удалить</button>`}</td></tr>`).join('');
         $('#emptyUsers').hidden = users.length > 0;
     } finally {
         setTableBusy(wrap, false);
