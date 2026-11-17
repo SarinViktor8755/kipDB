@@ -384,6 +384,7 @@ async function loadTrash() {
 
 function render() {
     renderAllTab();
+    Object.keys(workflowTabs).forEach(renderWorkflowTab);
 }
 
 function formatTableDate(value) {
@@ -473,6 +474,226 @@ function renderAllTab() {
 
     const emptyEl = $('#emptyAll');
     if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
+}
+
+
+/* =========================================================
+ *  Рабочие списки: «На позиции», «Склад», «КИП»
+ *  Используют ту же структуру таблицы и те же поля, что «Все приборы».
+ * ========================================================= */
+const workflowTabs = {
+    positions: { status: 'На позиции', title: 'На позиции', actions: [{label:'Переместить на склад', status:'WAREHOUSE', event:'Передача на склад'}] },
+    warehouse: { status: 'Склад', title: 'Склад', actions: [{label:'Передать в КИП', status:'KIP', event:'Передача в КИП'}] },
+    kip: { status: 'КИП', title: 'КИП', actions: [
+        {label:'Вернуть на склад', status:'WAREHOUSE', event:'Возврат из КИП на склад'},
+        {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'}
+    ] }
+};
+const workflowSelection = { positions: new Set(), warehouse: new Set(), kip: new Set() };
+const workflowFilters = { positions: {}, warehouse: {}, kip: {} };
+
+function initializeWorkflowTabs() {
+    const source = document.getElementById('tableAll');
+    if (!source) return;
+    Object.entries(workflowTabs).forEach(([key, config]) => {
+        const host = document.querySelector(`[data-workflow-tab="${key}"]`);
+        if (!host) return;
+        const toolbar = document.createElement('div');
+        toolbar.className = 'toolbar workflow-toolbar';
+        toolbar.innerHTML = `<input type="search" class="workflow-search" placeholder="Поиск по названию, зав. номеру или позиции…" aria-label="Поиск">
+            <span class="workflow-selected-count">Выбрано: 0</span>
+            ${config.actions.map((act, i) => `<button type="button" class="btn-primary workflow-action" data-action-index="${i}" disabled>${act.label}</button>`).join('')}
+            <button type="button" class="btn workflow-clear-selection">Снять выделение</button>`;
+        const wrap = document.createElement('div');
+        wrap.className = 'devices-table-scroll';
+        const table = source.cloneNode(true);
+        table.id = `tableWorkflow_${key}`;
+        table.querySelectorAll('tbody').forEach(tb => tb.innerHTML = '');
+        table.querySelectorAll('datalist').forEach(el => el.remove());
+        table.querySelectorAll('input.col-filter').forEach(inp => {
+            inp.value = '';
+            inp.dataset.workflowTab = key;
+        });
+        table.querySelectorAll('select.col-sort').forEach(sel => {
+            sel.value = '';
+            sel.dataset.workflowTab = key;
+        });
+        table.querySelectorAll('thead tr').forEach((tr, index) => {
+            const th = document.createElement('th');
+            th.className = 'workflow-select-cell';
+            th.innerHTML = index === 0
+                ? `<input type="checkbox" class="workflow-select-all" aria-label="Выбрать все видимые приборы">`
+                : '';
+            tr.prepend(th);
+        });
+        wrap.appendChild(table);
+        const empty = document.createElement('div');
+        empty.className = 'empty workflow-empty';
+        empty.textContent = 'Нет приборов';
+        host.replaceChildren(toolbar, wrap, empty);
+
+        toolbar.querySelector('.workflow-search').addEventListener('input', debounce(() => renderWorkflowTab(key), 180));
+        toolbar.querySelector('.workflow-clear-selection').addEventListener('click', () => {
+            workflowSelection[key].clear();
+            renderWorkflowTab(key);
+        });
+        toolbar.querySelectorAll('.workflow-action').forEach(btn => btn.addEventListener('click', () => {
+            const action = config.actions[Number(btn.dataset.actionIndex)];
+            moveSelectedDevices(key, action).catch(err => showToast('Ошибка перемещения', err.message, 'error'));
+        }));
+        table.addEventListener('change', event => {
+            const checkbox = event.target.closest('.workflow-device-check');
+            if (checkbox) {
+                const id = Number(checkbox.dataset.id);
+                if (checkbox.checked) workflowSelection[key].add(id);
+                else workflowSelection[key].delete(id);
+                updateWorkflowToolbar(key);
+                const selectAll = table.querySelector('.workflow-select-all');
+                const visible = [...table.querySelectorAll('.workflow-device-check')];
+                if (selectAll) selectAll.checked = visible.length > 0 && visible.every(x => x.checked);
+                return;
+            }
+            if (event.target.matches('.workflow-select-all')) {
+                table.querySelectorAll('.workflow-device-check').forEach(cb => {
+                    cb.checked = event.target.checked;
+                    const id = Number(cb.dataset.id);
+                    if (event.target.checked) workflowSelection[key].add(id);
+                    else workflowSelection[key].delete(id);
+                });
+                updateWorkflowToolbar(key);
+            }
+        });
+        table.querySelectorAll('.col-filter').forEach(inp => inp.addEventListener('input', debounce(() => {
+            const col = inp.dataset.col, value = (inp.value || '').toLowerCase().trim();
+            if (value) workflowFilters[key][col] = value;
+            else delete workflowFilters[key][col];
+            renderWorkflowTab(key);
+        }, 180)));
+        table.querySelectorAll('.col-sort').forEach(sel => sel.addEventListener('change', () => {
+            const col = sel.dataset.col, value = sel.value;
+            if (value) workflowFilters[key]['__sort_' + col] = value;
+            else delete workflowFilters[key]['__sort_' + col];
+            renderWorkflowTab(key);
+        }));
+        table.addEventListener('click', event => {
+            if (event.target.closest('input,select,button,label')) return;
+            const row = event.target.closest('tr[data-id]');
+            if (!row) return;
+            const device = state.devices.find(d => Number(d.id) === Number(row.dataset.id));
+            if (device) openViewModal(device);
+        });
+    });
+}
+
+function renderWorkflowTab(key) {
+    const config = workflowTabs[key];
+    const host = document.querySelector(`[data-workflow-tab="${key}"]`);
+    if (!config || !host) return;
+    const table = host.querySelector('table');
+    if (!table) return;
+    const query = (host.querySelector('.workflow-search')?.value || '').toLowerCase().trim();
+    const filters = workflowFilters[key];
+    let rows = state.devices.filter(device => {
+        if (locationStatusOf(device) !== config.status) return false;
+        if (query && ![device.name,device.location,device.serialNumber,device.sensorType,device.unit,device.category,device.groupName,device.positionName,device.redLine].join(' ').toLowerCase().includes(query)) return false;
+        for (const [col, needle] of Object.entries(filters)) {
+            if (col.startsWith('__sort_')) continue;
+            if (!String(cellValueForColumn(device, col) || '').toLowerCase().includes(needle)) return false;
+        }
+        return true;
+    });
+    const sortEntries = Object.entries(filters).filter(([col]) => col.startsWith('__sort_'));
+    if (sortEntries.length) {
+        const [keySort, dir] = sortEntries[sortEntries.length - 1], col = keySort.slice(7);
+        rows.sort((a,b) => {
+            const av = String(a[col] || ''), bv = String(b[col] || '');
+            if (!av) return bv ? 1 : 0;
+            if (!bv) return -1;
+            return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+    } else {
+        rows.sort((a,b) => String(a.nextVerification || '9999').localeCompare(String(b.nextVerification || '9999')));
+    }
+    table.querySelector('tbody').innerHTML = rows.map(d => `<tr data-id="${d.id}">
+        <td class="workflow-select-cell"><input type="checkbox" class="workflow-device-check" data-id="${d.id}" aria-label="Выбрать прибор" ${workflowSelection[key].has(Number(d.id)) ? 'checked' : ''}></td>
+        <td>${escapeHtml(d.serialNumber || '—')}</td><td>${escapeHtml(d.location || '—')}</td>
+        <td>${escapeHtml(d.sensorType || '—')}</td><td>${escapeHtml(formatScale(d))}</td>
+        <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
+        <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
+        <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
+        <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(d.groupName || '—')}</td>
+        <td>${escapeHtml(d.positionName || d.name || '—')}</td>
+        <td><span class="location-status">${escapeHtml(locationStatusOf(d))}</span></td>
+    </tr>`).join('');
+    const empty = host.querySelector('.workflow-empty');
+    if (empty) empty.hidden = rows.length > 0;
+    const selectAll = table.querySelector('.workflow-select-all');
+    if (selectAll) {
+        const checks = [...table.querySelectorAll('.workflow-device-check')];
+        selectAll.checked = checks.length > 0 && checks.every(cb => cb.checked);
+        selectAll.indeterminate = checks.some(cb => cb.checked) && !selectAll.checked;
+    }
+    updateWorkflowToolbar(key);
+}
+
+function updateWorkflowToolbar(key) {
+    const host = document.querySelector(`[data-workflow-tab="${key}"]`);
+    if (!host) return;
+    const selected = workflowSelection[key].size;
+    host.querySelector('.workflow-selected-count').textContent = `Выбрано: ${selected}`;
+    host.querySelectorAll('.workflow-action').forEach(btn => btn.disabled = selected === 0);
+}
+
+async function moveSelectedDevices(fromTab, action) {
+    const ids = [...workflowSelection[fromTab]];
+    if (!ids.length) return;
+    const targetLabel = action.status === 'INSTALLED' ? 'На позиции' : action.status === 'WAREHOUSE' ? 'Склад' : 'КИП';
+    if (!confirm(`Переместить выбранные приборы (${ids.length}) в раздел «${targetLabel}»?`)) return;
+    beginLoading();
+    let moved = 0, failed = [];
+    try {
+        for (const id of ids) {
+            const device = state.devices.find(d => Number(d.id) === id);
+            if (!device) continue;
+            const previousStatus = locationStatusOf(device);
+            const body = { ...device, workflowStatus: action.status, version: Number(device.version || 0) };
+            const response = await apiFetch('/api/devices/' + id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                failed.push(`${device.serialNumber || device.name}: ${error.message || error.error || response.status}`);
+                continue;
+            }
+            const updated = await response.json();
+            Object.assign(device, updated);
+            try {
+                await apiFetch(`/api/devices/${id}/movements`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        eventDate: today(),
+                        eventType: action.event,
+                        fromPlace: previousStatus,
+                        toPlace: targetLabel,
+                        note: ''
+                    })
+                });
+            } catch (logError) {
+                console.warn('Не удалось записать историю перемещения', logError);
+            }
+            moved++;
+        }
+        workflowSelection[fromTab].clear();
+        render();
+        if (moved) showToast('Перемещение выполнено', `Перемещено приборов: ${moved}`, 'success');
+        if (failed.length) showToast('Не все приборы перемещены', failed.slice(0, 3).join('; '), 'error');
+
+    } finally {
+        finishLoading();
+    }
 }
 
 let movementsLoadAll = false;
@@ -630,6 +851,7 @@ function switchTab(tabName) {
     state.currentTab = tabName;
 
     if (!state.user) return;
+    if (workflowTabs[tabName]) renderWorkflowTab(tabName);
     if (tabName === 'users' && state.user.role !== 'admin') { window.location.hash = 'all'; return; }
     if (tabName === 'audit') renderAuditTab(200);
     if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
@@ -1550,6 +1772,6 @@ $('#viewPrintBtn').addEventListener('click', () => {
  *  СТАРТ
  * ========================================================= */
 document.addEventListener('DOMContentLoaded', () => {
+    initializeWorkflowTabs();
     initializeAuth();
 });
-

@@ -824,3 +824,36 @@ button[data-busy="1"] .btn-spinner {
     font-size: 12px;
     white-space: nowrap;
 }
+
+/* Таблицы рабочих разделов: выбор приборов и пакетные перемещения */
+.workflow-toolbar {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.workflow-toolbar .workflow-search {
+    flex: 1 1 280px;
+    min-width: 220px;
+}
+.workflow-selected-count {
+    color: var(--muted, #64748b);
+    font-size: 13px;
+    white-space: nowrap;
+}
+.workflow-action:disabled {
+    opacity: .48;
+    cursor: not-allowed;
+}
+.workflow-select-cell {
+    width: 38px;
+    min-width: 38px;
+    max-width: 38px;
+    text-align: center !important;
+}
+.workflow-select-cell input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent, #2563eb);
+}
+.workflow-empty[hidden] { display: none; }

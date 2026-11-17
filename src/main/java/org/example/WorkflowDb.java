@@ -82,4 +82,3 @@ public final class WorkflowDb {
     private static String required(String s,String field){if(s==null||s.isBlank())throw new IllegalArgumentException(field+" обязательно");return s.trim();}
     private static String n(String s){return s==null?"":s.trim();}
 }
-

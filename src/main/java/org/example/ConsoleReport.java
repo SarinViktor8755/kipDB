@@ -148,4 +148,3 @@ public class ConsoleReport {
         return s == null ? "-" : s;
     }
 }
-

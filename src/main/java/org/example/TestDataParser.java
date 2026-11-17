@@ -479,5 +479,3 @@ public final class TestDataParser {
         }
     }
 }
-
-

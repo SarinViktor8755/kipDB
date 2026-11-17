@@ -38,4 +38,3 @@ public final class AuthUtil {
         finally { spec.clearPassword(); }
     }
 }
-

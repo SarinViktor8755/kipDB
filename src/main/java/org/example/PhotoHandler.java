@@ -57,4 +57,3 @@ public class PhotoHandler implements HttpHandler {
         try (OutputStream out = ex.getResponseBody()) { out.write(b); }
     }
 }
-

@@ -31,5 +31,3 @@ public class Main {
         System.out.println("Для остановки нажмите Ctrl+C");
     }
 }
-
-
