@@ -22,6 +22,9 @@
 
 <nav class="tabs">
     <a href="#all" class="tab active" data-tab="all">Все приборы</a>
+    <a href="#positions" class="tab" data-tab="positions">На позиции</a>
+    <a href="#warehouse" class="tab" data-tab="warehouse">Склад</a>
+    <a href="#kip" class="tab" data-tab="kip">КИП</a>
     <a href="#documents" class="tab" data-tab="documents">Документы</a>
     <a href="#movements" class="tab" data-tab="movements">Перемещения</a>
     <a href="#audit" class="tab" data-tab="audit">Журнал</a>
@@ -70,12 +73,10 @@
                     <th>Дата следующей поверки</th>
                     <th>Класс точности</th>
                     <th>Красная черта</th>
-                    <th>Списание</th>
                     <th>Отложенная поверка</th>
-                    <th>Движение</th>
-                    <th>Строка</th>
                     <th>Группа</th>
                     <th>Наименование позиции</th>
+                    <th>Статус</th>
                 </tr>
                 <tr class="head-filters">
                     <th><input class="col-filter" data-col="serialNumber"         list="col-dl-serialNumber"         type="search" placeholder="Фильтр…"></th>
@@ -101,18 +102,10 @@
                     </th>
                     <th><input class="col-filter" data-col="accuracyClass"        list="col-dl-accuracyClass"        type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="redLine"              list="col-dl-redLine"              type="search" placeholder="Фильтр…"></th>
-                    <th>
-                        <select class="col-sort" data-col="writeOff">
-                            <option value="">— все —</option>
-                            <option value="desc">Сначала новые</option>
-                            <option value="asc">Сначала старые</option>
-                        </select>
-                    </th>
                     <th><input class="col-filter" data-col="deferredVerification" list="col-dl-deferredVerification" type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="movement"             list="col-dl-movement"             type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="rowNumber"            list="col-dl-rowNumber"            type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="groupName"            list="col-dl-groupName"            type="search" placeholder="Фильтр…"></th>
                     <th><input class="col-filter" data-col="positionName"         list="col-dl-positionName"         type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="locationStatus"       list="col-dl-locationStatus"       type="search" placeholder="Фильтр…"></th>
                 </tr>
                 </thead>
                 <tbody></tbody>
@@ -120,6 +113,10 @@
         </div>
         <div id="emptyAll" class="empty" hidden>Нет приборов</div>
     </section>
+
+    <section id="tab-positions" class="tab-panel"><div class="empty">Раздел «На позиции» пока пуст. Здесь будут отображаться приборы, установленные на рабочих позициях.</div></section>
+    <section id="tab-warehouse" class="tab-panel"><div class="empty">Раздел «Склад» пока пуст. Здесь будут отображаться приборы, находящиеся на складе.</div></section>
+    <section id="tab-kip" class="tab-panel"><div class="empty">Раздел «КИП» пока пуст. Здесь будут отображаться приборы, находящиеся в цехе КИП.</div></section>
 
     <section id="tab-documents" class="tab-panel">
         <div id="documentsListView">
@@ -518,6 +515,7 @@
                     <label>Дата следующей поверки<input id="fNext" type="date"></label>
                     <label>Списание<input id="fWriteOff" type="date"></label>
                     <label>Отложенная поверка<input id="fDeferredVerification" type="text" placeholder="Дата или примечание"></label>
+                    <label>Статус прибора<select id="fWorkflowStatus"><option value="WAREHOUSE">Склад</option><option value="INSTALLED">На позиции</option><option value="KIP">КИП</option><option value="WRITTEN_OFF">Списан</option></select></label>
                 </div>
             </fieldset>
 
@@ -541,6 +539,7 @@
             </fieldset>
 
             <div class="modal-actions">
+                <button type="button" id="copyDeviceBtn" class="btn" hidden>Копировать прибор</button>
                 <button type="button" id="cancelBtn" class="btn">Отмена</button>
                 <button type="submit" class="btn-primary">Сохранить</button>
             </div>
@@ -597,3 +596,5 @@
 <script src="/app.js"></script>
 </body>
 </html>
+
+

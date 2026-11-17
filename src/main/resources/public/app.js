@@ -78,6 +78,16 @@ function formatDateTime(dtStr) {
     return dtStr;
 }
 
+function locationStatusOf(d) {
+    const value = d.workflowStatus;
+    if (value === 'WRITTEN_OFF' || d.writeOff) return 'Списан';
+    if (value === 'KIP') return 'КИП';
+    if (value === 'WAREHOUSE') return 'Склад';
+    if (value === 'INSTALLED') return 'На позиции';
+    return String(d.location || '').trim() ? 'На позиции' : 'Склад';
+}
+function locationStatusLabel(d) { return locationStatusOf(d); }
+
 function statusOf(d) {
     if (!d.nextVerification) return 'ok';
     const t = today();
@@ -270,8 +280,7 @@ function cellValueForColumn(d, col) {
         case 'accuracyClass':        return d.accuracyClass || '';
         case 'redLine':              return d.redLine || '';
         case 'deferredVerification': return d.deferredVerification || '';
-        case 'movement':             return d.movement || '';
-        case 'rowNumber':            return d.rowNumber || '';
+        case 'locationStatus':      return locationStatusLabel(d);
         case 'groupName':            return d.groupName || '';
         case 'positionName':         return d.positionName || d.name || '';
         default:                     return '';
@@ -281,8 +290,8 @@ function cellValueForColumn(d, col) {
 function populateColumnDatalists() {
     const columns = [
         'serialNumber', 'location', 'sensorType', 'scale', 'category',
-        'mpi', 'accuracyClass', 'redLine', 'deferredVerification', 'movement',
-        'rowNumber', 'groupName', 'positionName'
+        'mpi', 'accuracyClass', 'redLine', 'deferredVerification',
+        'groupName', 'positionName', 'locationStatus'
     ];
 
     for (const col of columns) {
@@ -457,9 +466,9 @@ function renderAllTab() {
         <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
         <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
-        <td>${formatTableDate(d.writeOff)}</td><td>${escapeHtml(d.deferredVerification || '—')}</td>
-        <td>${escapeHtml(d.location || '—')}</td><td>${escapeHtml(d.rowNumber || '—')}</td>
+        <td>${escapeHtml(d.deferredVerification || '—')}</td>
         <td>${escapeHtml(d.groupName || '—')}</td><td>${escapeHtml(d.positionName || d.name || '—')}</td>
+        <td><span class="location-status">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`).join('');
 
     const emptyEl = $('#emptyAll');
@@ -646,7 +655,7 @@ async function handleAppRoute() {
         return;
     }
 
-    const allowedTabs = ['all', 'documents', 'movements', 'audit', 'trash', 'help', 'users'];
+    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'documents', 'movements', 'audit', 'trash', 'help', 'users'];
     switchTab(allowedTabs.includes(hash) ? hash : 'all');
 }
 
@@ -1146,6 +1155,9 @@ function openModal(device) {
     setFormValue('fDeferredVerification', device?.deferredVerification);
     setFormValue('fRowNumber', device?.rowNumber);
     setFormValue('fGroupName', device?.groupName);
+    setFormValue('fWorkflowStatus', device?.workflowStatus || (device?.writeOff ? 'WRITTEN_OFF' : (device?.location ? 'INSTALLED' : 'WAREHOUSE')));
+    $('#copyDeviceBtn').hidden = !device;
+    $('#copyDeviceBtn').dataset.sourceId = device ? device.id : ''; 
 
     const prev = $('#photoPreview');
     const removeBtn = $('#removePhotoBtn');
@@ -1182,6 +1194,7 @@ function collectDeviceFormData() {
         deferredVerification: $('#fDeferredVerification').value.trim(),
         rowNumber: $('#fRowNumber').value.trim(),
         groupName: $('#fGroupName').value.trim(),
+        workflowStatus: $('#fWorkflowStatus').value,
         version: parseInt($('#fVersion').value, 10) || 0
     };
 }
@@ -1189,6 +1202,17 @@ function collectDeviceFormData() {
 function closeModal() { $('#modal').hidden = true; }
 
 $('#addBtn').addEventListener('click', () => openModal(null));
+$('#copyDeviceBtn').addEventListener('click', () => {
+    const source = state.devices.find(d => String(d.id) === String($('#copyDeviceBtn').dataset.sourceId));
+    if (!source) return;
+    const copy = { ...source, id: null, version: 0, serialNumber: '', location: '', rowNumber: '', groupName: '', positionName: '', name: source.positionName || source.name, workflowStatus: 'WAREHOUSE', writeOff: '', photoPath: null, photoThumbPath: null };
+    openModal(copy);
+    setFormValue('fId', '');
+    setFormValue('fVersion', 0);
+    $('#copyDeviceBtn').hidden = true;
+    $('#modalTitle').textContent = 'Новый прибор — копия';
+    showToast('Создана копия карточки', 'Укажите новый заводской номер и сохраните прибор', 'info');
+});
 $('#cancelBtn').addEventListener('click', closeModal);
 $('#modalCloseBtn').addEventListener('click', closeModal);
 
@@ -1528,3 +1552,4 @@ $('#viewPrintBtn').addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
 });
+

@@ -809,3 +809,18 @@ button[data-busy="1"] .btn-spinner {
     font-weight: 400;
 }
 #movementsCount { white-space: nowrap; }
+
+
+
+
+/* Текущий статус размещения прибора */
+.location-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: var(--surface-soft, #eef2f7);
+    color: var(--text, #344054);
+    font-size: 12px;
+    white-space: nowrap;
+}

@@ -632,7 +632,7 @@ public class ApiHandler implements HttpHandler {
         d.nextVerification = emptyToNull(o.optString("nextVerification", null)); d.photoPath = emptyToNull(o.optString("photoPath", null));
         d.photoThumbPath = emptyToNull(o.optString("photoThumbPath", null)); d.version = o.optInt("version", 0);
         JSONObject details = new JSONObject();
-        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName"};
+        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName","workflowStatus"};
         for (String key : keys) if (o.has(key)) details.put(key, o.opt(key));
         d.detailsJson = details.toString(); return d;
     }
@@ -724,3 +724,4 @@ public class ApiHandler implements HttpHandler {
         return s;
     }
 }
+
