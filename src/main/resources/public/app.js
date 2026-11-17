@@ -86,6 +86,14 @@ function locationStatusOf(d) {
     if (value === 'INSTALLED') return 'На позиции';
     return String(d.location || '').trim() ? 'На позиции' : 'Склад';
 }
+
+function locationStatusClassOf(d) {
+    const status = locationStatusOf(d);
+    return status === 'Склад' ? 'status-warehouse'
+        : status === 'КИП' ? 'status-kip'
+        : status === 'На позиции' ? 'status-installed'
+        : 'status-written-off';
+}
 function locationStatusLabel(d) { return locationStatusOf(d); }
 
 function statusOf(d) {
@@ -469,7 +477,7 @@ function renderAllTab() {
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td>
         <td>${escapeHtml(d.groupName || '—')}</td><td>${escapeHtml(d.positionName || d.name || '—')}</td>
-        <td><span class="location-status">${escapeHtml(locationStatusOf(d))}</span></td>
+        <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`).join('');
 
     const emptyEl = $('#emptyAll');
@@ -611,6 +619,14 @@ function renderWorkflowTab(key) {
             if (!bv) return -1;
             return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
         });
+    } else if (key === 'warehouse' || key === 'kip') {
+        // В разделах «Склад» и «КИП» сверху показываем приборы,
+        // которые последними были перемещены в соответствующий раздел.
+        rows.sort((a, b) => {
+            const at = Date.parse(a.workflowMovedAt || a.createdAt || '') || 0;
+            const bt = Date.parse(b.workflowMovedAt || b.createdAt || '') || 0;
+            return bt - at;
+        });
     } else {
         rows.sort((a,b) => String(a.nextVerification || '9999').localeCompare(String(b.nextVerification || '9999')));
     }
@@ -623,7 +639,7 @@ function renderWorkflowTab(key) {
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(d.groupName || '—')}</td>
         <td>${escapeHtml(d.positionName || d.name || '—')}</td>
-        <td><span class="location-status">${escapeHtml(locationStatusOf(d))}</span></td>
+        <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`).join('');
     const empty = host.querySelector('.workflow-empty');
     if (empty) empty.hidden = rows.length > 0;
@@ -641,56 +657,83 @@ function updateWorkflowToolbar(key) {
     if (!host) return;
     const selected = workflowSelection[key].size;
     host.querySelector('.workflow-selected-count').textContent = `Выбрано: ${selected}`;
-    host.querySelectorAll('.workflow-action').forEach(btn => btn.disabled = selected === 0);
+    host.querySelectorAll('.workflow-action').forEach(btn => {
+        const action = workflowTabs[key].actions[Number(btn.dataset.actionIndex)];
+        const overWarehouseLimit = action?.status === 'WAREHOUSE' && selected > 20;
+        btn.disabled = selected === 0 || overWarehouseLimit;
+        btn.title = overWarehouseLimit ? 'На склад можно переместить не более 20 приборов за одну операцию' : '';
+    });
 }
 
 async function moveSelectedDevices(fromTab, action) {
     const ids = [...workflowSelection[fromTab]];
     if (!ids.length) return;
+    if (action.status === 'WAREHOUSE' && ids.length > 20) {
+        showToast('Превышен лимит', 'На склад можно переместить не более 20 приборов за одну операцию. Снимите выделение с лишних приборов.', 'error');
+        return;
+    }
+    const selectedDevices = ids.map(id => state.devices.find(d => Number(d.id) === id)).filter(Boolean);
+    if (action.status === 'WAREHOUSE' && selectedDevices.some(device => locationStatusOf(device) === 'Склад')) {
+        showToast('Перемещение невозможно', 'Прибор, который уже находится на складе, нельзя повторно отправить на склад.', 'error');
+        return;
+    }
     const targetLabel = action.status === 'INSTALLED' ? 'На позиции' : action.status === 'WAREHOUSE' ? 'Склад' : 'КИП';
     if (!confirm(`Переместить выбранные приборы (${ids.length}) в раздел «${targetLabel}»?`)) return;
     beginLoading();
-    let moved = 0, failed = [];
+    let moved = 0, failed = [], successful = [];
     try {
-        for (const id of ids) {
+        // Отправляем изменения одним пакетом параллельных запросов и не перерисовываем таблицы
+        // до завершения всех ответов сервера.
+        const results = await Promise.all(ids.map(async id => {
             const device = state.devices.find(d => Number(d.id) === id);
-            if (!device) continue;
+            if (!device) return { id, error: 'Прибор не найден в текущем списке' };
             const previousStatus = locationStatusOf(device);
-            const body = { ...device, workflowStatus: action.status, version: Number(device.version || 0) };
-            const response = await apiFetch('/api/devices/' + id, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            if (!response.ok) {
-                const error = await response.json().catch(() => ({}));
-                failed.push(`${device.serialNumber || device.name}: ${error.message || error.error || response.status}`);
-                continue;
-            }
-            const updated = await response.json();
-            Object.assign(device, updated);
+            const body = { ...device, workflowStatus: action.status, workflowMovedAt: new Date().toISOString(), version: Number(device.version || 0) };
             try {
-                await apiFetch(`/api/devices/${id}/movements`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        eventDate: today(),
-                        eventType: action.event,
-                        fromPlace: previousStatus,
-                        toPlace: targetLabel,
-                        note: ''
-                    })
+                const response = await apiFetch('/api/devices/' + id, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
                 });
-            } catch (logError) {
-                console.warn('Не удалось записать историю перемещения', logError);
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    return { id, device, error: error.message || error.error || response.status };
+                }
+                return { id, device, updated: await response.json(), previousStatus };
+            } catch (error) {
+                return { id, device, error: error.message || String(error) };
             }
-            moved++;
+        }));
+
+        for (const result of results) {
+            if (result.error) failed.push(`${result.device?.serialNumber || result.device?.name || ('#' + result.id)}: ${result.error}`);
+            else {
+                Object.assign(result.device, result.updated);
+                successful.push(result);
+            }
         }
+        moved = successful.length;
+
+        // Одна запись пакетной операции в журнале. В истории каждого прибора
+        // сохраняется отдельная запись, но в общем журнале они отображаются одной строкой.
+        if (successful.length) {
+            const logResponse = await apiFetch('/api/movements/batch', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    deviceIds: successful.map(item => item.id),
+                    eventDate: today(), eventType: action.event,
+                    fromPlace: [...new Set(successful.map(item => item.previousStatus))].join(', '),
+                    toPlace: targetLabel, note: ''
+                })
+            });
+            if (!logResponse.ok) {
+                const error = await logResponse.json().catch(() => ({}));
+                failed.push('Журнал: ' + (error.message || error.error || logResponse.status));
+            }
+        }
+
         workflowSelection[fromTab].clear();
         render();
-        if (moved) showToast('Перемещение выполнено', `Перемещено приборов: ${moved}`, 'success');
-        if (failed.length) showToast('Не все приборы перемещены', failed.slice(0, 3).join('; '), 'error');
-
+        if (moved) showToast('Перемещение выполнено', `Перемещено приборов: ${moved} одной операцией`, 'success');
+        if (failed.length) showToast('Есть ошибки', failed.slice(0, 3).join('; '), 'error');
     } finally {
         finishLoading();
     }
@@ -747,7 +790,9 @@ function renderMovements(rows) {
         html += `<tr class="movement-date-row"><td colspan="8">${escapeHtml(date)} <span>${items.length} ${items.length === 1 ? 'перемещение' : 'перемещений'}</span></td></tr>`;
         html += items.map(m => `<tr>
             <td>${escapeHtml(formatDateTime(m.createdAt || m.eventDate))}</td>
-            <td><button type="button" class="btn-link" data-open-movement-device="${m.deviceId}">${escapeHtml(m.name || ('Прибор #' + m.deviceId))}</button></td>
+            <td>${Number(m.deviceCount || 1) > 1
+                ? `<strong>${escapeHtml(m.name || (m.deviceCount + ' прибора'))}</strong>`
+                : `<button type="button" class="btn-link" data-open-movement-device="${m.deviceId}">${escapeHtml(m.name || ('Прибор #' + m.deviceId))}</button>`}</td>
             <td>${escapeHtml(m.serialNumber || '—')}</td>
             <td>${escapeHtml(m.eventType || '—')}</td>
             <td>${escapeHtml(m.fromPlace || '—')}</td>
@@ -1417,6 +1462,7 @@ function collectDeviceFormData() {
         rowNumber: $('#fRowNumber').value.trim(),
         groupName: $('#fGroupName').value.trim(),
         workflowStatus: $('#fWorkflowStatus').value,
+        workflowMovedAt: state.devices.find(d => String(d.id) === String($('#fId').value))?.workflowMovedAt || '',
         version: parseInt($('#fVersion').value, 10) || 0
     };
 }

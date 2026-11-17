@@ -817,12 +817,35 @@ button[data-busy="1"] .btn-spinner {
 .location-status {
     display: inline-flex;
     align-items: center;
-    padding: 3px 8px;
+    padding: 4px 9px;
     border-radius: 12px;
-    background: var(--surface-soft, #eef2f7);
-    color: var(--text, #344054);
     font-size: 12px;
+    font-weight: 650;
+    line-height: 1.25;
     white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+/* Контрастные метки статусов во всех таблицах */
+.location-status.status-warehouse {
+    color: #174ea6;
+    background: #e8f0fe;
+    border-color: #c6dafc;
+}
+.location-status.status-kip {
+    color: #6b21a8;
+    background: #f3e8ff;
+    border-color: #e4ccff;
+}
+.location-status.status-installed {
+    color: #166534;
+    background: #dcfce7;
+    border-color: #bbf7d0;
+}
+.location-status.status-written-off {
+    color: #991b1b;
+    background: #fee2e2;
+    border-color: #fecaca;
 }
 
 /* Таблицы рабочих разделов: выбор приборов и пакетные перемещения */

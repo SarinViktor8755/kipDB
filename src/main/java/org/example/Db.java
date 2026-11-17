@@ -153,10 +153,13 @@ public class Db {
                     to_place TEXT,
                     note TEXT,
                     created_by TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    batch_id TEXT
                 );
                 """);
+            try { s.execute("ALTER TABLE device_movements ADD COLUMN batch_id TEXT"); } catch (SQLException ignored) {}
             s.execute("CREATE INDEX IF NOT EXISTS idx_device_movements_created ON device_movements(event_date DESC, created_at DESC, id DESC)");
+            s.execute("CREATE INDEX IF NOT EXISTS idx_device_movements_batch ON device_movements(batch_id)");
 
             s.execute("""
                 CREATE TABLE IF NOT EXISTS device_document_history (
@@ -1093,12 +1096,18 @@ public class Db {
         JSONArray result = new JSONArray();
         String q = search == null ? "" : search.trim().toLowerCase();
         String sql = """
-                SELECT m.id, m.device_id, d.name, d.serial_number, m.event_date, m.event_type,
-                       m.from_place, m.to_place, m.note, m.created_by, m.created_at
+                SELECT MIN(m.id) AS id, MIN(m.device_id) AS device_id,
+                       CASE WHEN m.batch_id IS NULL THEN COALESCE(MIN(d.name),'')
+                            ELSE CAST(COUNT(*) AS TEXT) || CASE WHEN COUNT(*) % 100 BETWEEN 11 AND 14 THEN ' приборов' WHEN COUNT(*) % 10 = 1 THEN ' прибор' WHEN COUNT(*) % 10 BETWEEN 2 AND 4 THEN ' прибора' ELSE ' приборов' END END AS display_name,
+                       group_concat(COALESCE(NULLIF(d.serial_number,''), d.name), ', ') AS serial_numbers,
+                       MAX(m.event_date) AS event_date, MAX(m.event_type) AS event_type,
+                       MAX(m.from_place) AS from_place, MAX(m.to_place) AS to_place,
+                       MAX(m.note) AS note, MAX(m.created_by) AS created_by,
+                       MAX(m.created_at) AS created_at, COUNT(*) AS device_count,
+                       m.batch_id AS batch_id
                 FROM device_movements m
                 LEFT JOIN devices d ON d.id = m.device_id
-                WHERE (? = '' OR
-                       lower(coalesce(d.name,'')) LIKE ? OR
+                WHERE (? = '' OR lower(coalesce(d.name,'')) LIKE ? OR
                        lower(coalesce(d.serial_number,'')) LIKE ? OR
                        lower(coalesce(m.event_type,'')) LIKE ? OR
                        lower(coalesce(m.from_place,'')) LIKE ? OR
@@ -1106,7 +1115,8 @@ public class Db {
                        lower(coalesce(m.note,'')) LIKE ? OR
                        lower(coalesce(m.created_by,'')) LIKE ? OR
                        cast(m.device_id AS TEXT) LIKE ?)
-                ORDER BY m.event_date DESC, m.created_at DESC, m.id DESC
+                GROUP BY CASE WHEN m.batch_id IS NULL THEN 'single-' || m.id ELSE 'batch-' || m.batch_id END
+                ORDER BY event_date DESC, created_at DESC, id DESC
                 """ + (limit > 0 ? " LIMIT ?" : "");
         try (Connection c = DriverManager.getConnection(DB_URL);
              PreparedStatement ps = c.prepareStatement(sql)) {
@@ -1119,19 +1129,42 @@ public class Db {
                     result.put(new JSONObject()
                             .put("id", rs.getLong("id"))
                             .put("deviceId", rs.getLong("device_id"))
-                            .put("name", rs.getString("name") == null ? "" : rs.getString("name"))
-                            .put("serialNumber", rs.getString("serial_number") == null ? "" : rs.getString("serial_number"))
+                            .put("name", rs.getString("display_name") == null ? "" : rs.getString("display_name"))
+                            .put("serialNumber", rs.getString("serial_numbers") == null ? "" : rs.getString("serial_numbers"))
                             .put("eventDate", rs.getString("event_date") == null ? "" : rs.getString("event_date"))
                             .put("eventType", rs.getString("event_type") == null ? "" : rs.getString("event_type"))
                             .put("fromPlace", rs.getString("from_place") == null ? "" : rs.getString("from_place"))
                             .put("toPlace", rs.getString("to_place") == null ? "" : rs.getString("to_place"))
                             .put("note", rs.getString("note") == null ? "" : rs.getString("note"))
                             .put("createdBy", rs.getString("created_by") == null ? "" : rs.getString("created_by"))
-                            .put("createdAt", rs.getString("created_at") == null ? "" : rs.getString("created_at")));
+                            .put("createdAt", rs.getString("created_at") == null ? "" : rs.getString("created_at"))
+                            .put("deviceCount", rs.getInt("device_count"))
+                            .put("batchId", rs.getString("batch_id") == null ? "" : rs.getString("batch_id")));
                 }
             }
         }
         return result;
+    }
+
+    public static void addDeviceMovementsBatch(JSONArray deviceIds, String eventDate, String eventType,
+                                                String fromPlace, String toPlace, String note, String user) throws SQLException {
+        if (deviceIds == null || deviceIds.length() == 0) throw new SQLException("Не выбраны приборы для записи операции");
+        String batchId = java.util.UUID.randomUUID().toString();
+        try (Connection c = DriverManager.getConnection(DB_URL)) {
+            c.setAutoCommit(false);
+            try (PreparedStatement ps = c.prepareStatement("INSERT INTO device_movements(device_id,event_date,event_type,from_place,to_place,note,created_by,created_at,batch_id) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND is_deleted=0)")) {
+                for (int i = 0; i < deviceIds.length(); i++) {
+                    long id = deviceIds.getLong(i);
+                    ps.setLong(1, id); setDateOrNull(ps, 2, eventDate); ps.setString(3, eventType);
+                    ps.setString(4, fromPlace); ps.setString(5, toPlace); ps.setString(6, note);
+                    ps.setString(7, user); ps.setString(8, LocalDateTime.now().format(DB_DATE_FORMAT));
+                    ps.setString(9, batchId); ps.setLong(10, id);
+                    if (ps.executeUpdate() == 0) throw new SQLException("Прибор не найден: " + id);
+                }
+                c.commit();
+            } catch (SQLException e) { c.rollback(); throw e; }
+            finally { c.setAutoCommit(true); }
+        }
     }
 
     public static JSONArray getDeviceMovementHistory(long deviceId) throws SQLException {

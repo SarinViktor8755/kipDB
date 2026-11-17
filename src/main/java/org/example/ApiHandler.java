@@ -242,6 +242,21 @@ public class ApiHandler implements HttpHandler {
                 return;
             }
 
+            if (path.equals("/api/movements/batch")) {
+                if (!"POST".equals(method)) { methodNotAllowed(ex); return; }
+                JSONObject b = readJson(ex);
+                JSONArray ids = b.optJSONArray("deviceIds");
+                String eventDate = b.optString("eventDate", LocalDate.now().toString()).trim();
+                String eventType = b.optString("eventType", "").trim();
+                if (ids == null || ids.length() == 0 || eventType.isEmpty() || !eventDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                    sendJson(ex, 400, new JSONObject().put("error", "Укажите приборы, тип операции и корректную дату")); return;
+                }
+                Db.addDeviceMovementsBatch(ids, eventDate, eventType, emptyToNull(b.optString("fromPlace", "")),
+                        emptyToNull(b.optString("toPlace", "")), emptyToNull(b.optString("note", "")), currentUserName());
+                sendJson(ex, 201, new JSONObject().put("recorded", ids.length()));
+                return;
+            }
+
             if (path.equals("/api/movements") && "GET".equals(method)) {
                 String search = "";
                 boolean all = false;
@@ -632,7 +647,7 @@ public class ApiHandler implements HttpHandler {
         d.nextVerification = emptyToNull(o.optString("nextVerification", null)); d.photoPath = emptyToNull(o.optString("photoPath", null));
         d.photoThumbPath = emptyToNull(o.optString("photoThumbPath", null)); d.version = o.optInt("version", 0);
         JSONObject details = new JSONObject();
-        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName","workflowStatus"};
+        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName","workflowStatus","workflowMovedAt"};
         for (String key : keys) if (o.has(key)) details.put(key, o.opt(key));
         d.detailsJson = details.toString(); return d;
     }
