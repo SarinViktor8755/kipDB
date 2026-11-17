@@ -880,3 +880,50 @@ button[data-busy="1"] .btn-spinner {
     accent-color: var(--accent, #2563eb);
 }
 .workflow-empty[hidden] { display: none; }
+
+
+/* Справочник позиций из Книга1 */
+.reference-edit-field { width:100%; min-width:130px; box-sizing:border-box; padding:7px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg-1); color:var(--text); font:inherit; }
+#tableReferencePositions { min-width:900px; }
+#tableReferencePositions td:last-child { white-space:nowrap; }
+#referencePositionPager { align-items:center; }
+
+
+/* Разделы складского учёта визуально различаются по назначению. */
+.tabs .tab[data-tab="positions"] { color:#166534; background:#e8f5ec; border-color:#b7dfc3; }
+.tabs .tab[data-tab="positions"].active { color:#fff; background:#23834a; border-color:#23834a; }
+.tabs .tab[data-tab="warehouse"] { color:#92400e; background:#fff4df; border-color:#f2d39a; }
+.tabs .tab[data-tab="warehouse"].active { color:#fff; background:#b7791f; border-color:#b7791f; }
+.tabs .tab[data-tab="kip"] { color:#5b21b6; background:#f1eafe; border-color:#d7c4fa; }
+.tabs .tab[data-tab="kip"].active { color:#fff; background:#7040b5; border-color:#7040b5; }
+.danger-link { color:#b42318 !important; }
+
+.workflow-action-writeoff { background:#b42318 !important; border-color:#b42318 !important; color:#fff !important; }
+.workflow-action-writeoff:hover:not(:disabled) { background:#8f1c13 !important; }
+
+
+/* Заводские номера в истории — отдельные кликабельные ссылки */
+.serial-device-link {
+    display: inline;
+    padding: 0 2px;
+    font: inherit;
+    vertical-align: baseline;
+    white-space: nowrap;
+}
+
+.position-reference-preview {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(160px, 1fr);
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    color: var(--text);
+}
+.position-reference-preview > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.position-reference-preview .detail-label { color: var(--text-dim); }
+.position-reference-preview strong { color: var(--text); overflow-wrap: anywhere; font-weight: 600; }
+@media (max-width: 600px) {
+    .position-reference-preview { grid-template-columns: 1fr; }
+}

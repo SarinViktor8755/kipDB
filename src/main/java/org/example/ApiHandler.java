@@ -128,6 +128,37 @@ public class ApiHandler implements HttpHandler {
             if ("guest".equals(session.role) && !"GET".equals(method) && !"HEAD".equals(method)) {
                 sendJson(ex, 403, new JSONObject().put("error", "Гость может только просматривать данные")); return;
             }
+
+            // Справочник позиций из Книга1 хранится в таблице основной базы kip.db.
+            if (path.equals("/api/reference-positions")) {
+                if ("GET".equals(method)) sendJson(ex, 200, PositionDirectory.list());
+                else methodNotAllowed(ex);
+                return;
+            }
+            if (path.matches("/api/reference-positions/[0-9]+")) {
+                long positionId = Long.parseLong(path.substring("/api/reference-positions/".length()));
+                if ("DELETE".equals(method)) {
+                    if (PositionDirectory.delete(positionId)) sendJson(ex, 200, new JSONObject().put("deleted", true));
+                    else sendJson(ex, 404, new JSONObject().put("error", "Позиция не найдена"));
+                    return;
+                }
+                if (!"PUT".equals(method)) { methodNotAllowed(ex); return; }
+                JSONObject body = readJson(ex);
+                try {
+                    JSONObject updated = PositionDirectory.update(positionId,
+                            body.optString("position", ""), body.optString("description", ""), body.optString("equipment", ""));
+                    if (updated == null) sendJson(ex, 404, new JSONObject().put("error", "Позиция не найдена"));
+                    else sendJson(ex, 200, updated);
+                } catch (IllegalArgumentException e) {
+                    sendJson(ex, 400, new JSONObject().put("error", e.getMessage()));
+                } catch (SQLException e) {
+                    if (e.getMessage() != null && e.getMessage().toLowerCase().contains("unique"))
+                        sendJson(ex, 409, new JSONObject().put("error", "Такая позиция уже существует"));
+                    else throw e;
+                }
+                return;
+            }
+
             if (path.equals("/api/users") || path.startsWith("/api/users/")) {
                 if (!"admin".equals(session.role)) { sendJson(ex, 403, new JSONObject().put("error", "Только администратор может управлять пользователями")); return; }
                 if (path.equals("/api/users") && "GET".equals(method)) { sendJson(ex, 200, Db.getUsersPublic()); return; }
@@ -556,7 +587,8 @@ public class ApiHandler implements HttpHandler {
                     .put("action", r[2] == null ? "" : r[2])
                     .put("details", r[3] == null ? "" : r[3])
                     .put("name", r[4] == null ? "—" : r[4])
-                    .put("serialNumber", r[5] == null ? "—" : r[5]));
+                    .put("serialNumber", r[5] == null ? "—" : r[5])
+                    .put("deviceId", r.length > 6 && r[6] != null ? Long.parseLong(r[6]) : JSONObject.NULL));
         }
         // Вместо sendJson используем sendJsonGzip, так как журнал может быть большим
         sendJsonGzip(ex, 200, arr);
@@ -647,7 +679,7 @@ public class ApiHandler implements HttpHandler {
         d.nextVerification = emptyToNull(o.optString("nextVerification", null)); d.photoPath = emptyToNull(o.optString("photoPath", null));
         d.photoThumbPath = emptyToNull(o.optString("photoThumbPath", null)); d.version = o.optInt("version", 0);
         JSONObject details = new JSONObject();
-        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName","workflowStatus","workflowMovedAt"};
+        String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName","workflowStatus","workflowMovedAt","referencePositionId"};
         for (String key : keys) if (o.has(key)) details.put(key, o.opt(key));
         d.detailsJson = details.toString(); return d;
     }

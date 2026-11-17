@@ -763,7 +763,7 @@ public class Db {
              PreparedStatement ps = c.prepareStatement(
                      "SELECT a.changed_at, a.changed_by, a.action, a.details, " +
                              "COALESCE(doc.title, a.entity_name, d.name), " +
-                             "COALESCE(doc.document_number, a.entity_number, d.serial_number) " +
+                             "COALESCE(doc.document_number, a.entity_number, d.serial_number), a.device_id " +
                              "FROM audit_log a " +
                              "LEFT JOIN devices d ON a.device_id = d.id " +
                              "LEFT JOIN documents doc ON a.document_id = doc.id " +
@@ -774,7 +774,7 @@ public class Db {
                     rows.add(new String[]{
                             rs.getString(1), rs.getString(2),
                             rs.getString(3), rs.getString(4),
-                            rs.getString(5), rs.getString(6)
+                            rs.getString(5), rs.getString(6), rs.getString(7)
                     });
                 }
             }
@@ -1100,6 +1100,7 @@ public class Db {
                        CASE WHEN m.batch_id IS NULL THEN COALESCE(MIN(d.name),'')
                             ELSE CAST(COUNT(*) AS TEXT) || CASE WHEN COUNT(*) % 100 BETWEEN 11 AND 14 THEN ' приборов' WHEN COUNT(*) % 10 = 1 THEN ' прибор' WHEN COUNT(*) % 10 BETWEEN 2 AND 4 THEN ' прибора' ELSE ' приборов' END END AS display_name,
                        group_concat(COALESCE(NULLIF(d.serial_number,''), d.name), ', ') AS serial_numbers,
+                       group_concat(CAST(m.device_id AS TEXT), ',') AS device_ids,
                        MAX(m.event_date) AS event_date, MAX(m.event_type) AS event_type,
                        MAX(m.from_place) AS from_place, MAX(m.to_place) AS to_place,
                        MAX(m.note) AS note, MAX(m.created_by) AS created_by,
@@ -1131,6 +1132,7 @@ public class Db {
                             .put("deviceId", rs.getLong("device_id"))
                             .put("name", rs.getString("display_name") == null ? "" : rs.getString("display_name"))
                             .put("serialNumber", rs.getString("serial_numbers") == null ? "" : rs.getString("serial_numbers"))
+                            .put("deviceIds", rs.getString("device_ids") == null ? "" : rs.getString("device_ids"))
                             .put("eventDate", rs.getString("event_date") == null ? "" : rs.getString("event_date"))
                             .put("eventType", rs.getString("event_type") == null ? "" : rs.getString("event_type"))
                             .put("fromPlace", rs.getString("from_place") == null ? "" : rs.getString("from_place"))

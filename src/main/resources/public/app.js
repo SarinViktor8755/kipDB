@@ -41,6 +41,10 @@ function persistDeviceCache(etag, data) {
 const state = {
     selectedDocumentDeviceId: null,
     devices: [],
+    referencePositions: [],
+    referencePositionIndex: new Map(),
+    referencePositionPage: 0,
+    editingReferencePositionId: null,
     stats: { total: 0, overdue: 0, soon: 0, ok: 0 },
     currentTab: 'all',
     documents: [],
@@ -289,8 +293,8 @@ function cellValueForColumn(d, col) {
         case 'redLine':              return d.redLine || '';
         case 'deferredVerification': return d.deferredVerification || '';
         case 'locationStatus':      return locationStatusLabel(d);
-        case 'groupName':            return d.groupName || '';
-        case 'positionName':         return d.positionName || d.name || '';
+        case 'groupName':            { const ref = referencePositionForDevice(d); return ref ? ref.equipment : (d.groupName || ''); }
+        case 'positionName':         { const ref = referencePositionForDevice(d); return ref ? ref.description : (d.positionName || ''); }
         default:                     return '';
     }
 }
@@ -352,7 +356,7 @@ async function loadAll() {
     if (!state.devices.length) renderSkeleton(tbody, 8, 16);
 
     try {
-        await Promise.all([loadDevices(), loadStats()]);
+        await Promise.all([loadDevices(), loadStats(), loadReferencePositions()]);
         render();
         updateDatalists();
     } finally {
@@ -370,6 +374,30 @@ async function loadDevices() {
     const data = await r.json();
     state.devices = data;
     persistDeviceCache(r.headers.get('ETag'), data);
+}
+
+async function loadReferencePositions() {
+    const r = await apiFetch('/api/reference-positions');
+    if (!r.ok) throw new Error('reference positions: ' + r.status);
+    state.referencePositions = await r.json();
+    state.referencePositionIndex = new Map(state.referencePositions.map(x => [normalizePositionCode(x.position), x]));
+}
+
+function normalizePositionCode(value) {
+    return String(value || '').trim().toLocaleUpperCase('ru-RU').replace(/[‐‑‒–—−]/g, '-').replace(/\s+/g, '').replace(/[ABEKMHOPCTYX]/g, ch => ({A:'А',B:'В',E:'Е',K:'К',M:'М',H:'Н',O:'О',P:'Р',C:'С',T:'Т',Y:'У',X:'Х'}[ch] || ch));
+}
+
+function referencePositionForDevice(device) {
+    if (device.referencePositionId != null && device.referencePositionId !== '') {
+        const linked = state.referencePositions.find(x => Number(x.id) === Number(device.referencePositionId));
+        if (linked) return linked;
+    }
+    const candidates = [device.location, String(device.location || '').split('/').pop(), device.positionName];
+    for (const candidate of candidates) {
+        const found = state.referencePositionIndex.get(normalizePositionCode(candidate));
+        if (found) return found;
+    }
+    return null;
 }
 
 async function loadStats() {
@@ -432,7 +460,8 @@ function renderAllTab() {
 
     let rows = state.devices.filter(d => {
         if (q) {
-            const haystack = [d.name,d.location,d.serialNumber,d.sensorType,d.unit,d.category,d.groupName,d.positionName,d.redLine].join(' ').toLowerCase();
+            const ref = referencePositionForDevice(d);
+            const haystack = [d.name,d.location,d.serialNumber,d.sensorType,d.unit,d.category,d.groupName,d.positionName,ref && ref.description,ref && ref.equipment,d.redLine].join(' ').toLowerCase();
             if (!haystack.includes(q)) return false;
         }
         if (f && statusOf(d) !== f) return false;
@@ -468,17 +497,20 @@ function renderAllTab() {
         return an.localeCompare(bn);
     });
 
-    $('#tableAll tbody').innerHTML = rows.map(d => `<tr data-id="${d.id}">
-        <td>${escapeHtml(d.serialNumber || '—')}</td><td>${escapeHtml(d.location || '—')}</td>
+    $('#tableAll tbody').innerHTML = rows.map(d => {
+        const ref = referencePositionForDevice(d);
+        return `<tr data-id="${d.id}">
+        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td>
         <td>${escapeHtml(formatScale(d))}</td>
         <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
         <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td>
-        <td>${escapeHtml(d.groupName || '—')}</td><td>${escapeHtml(d.positionName || d.name || '—')}</td>
+        <td>${escapeHtml(ref ? (ref.equipment || '—') : (d.groupName || '—'))}</td><td>${escapeHtml(ref ? (ref.description || '—') : (d.positionName || '—'))}</td>
         <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
 
     const emptyEl = $('#emptyAll');
     if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
@@ -491,10 +523,11 @@ function renderAllTab() {
  * ========================================================= */
 const workflowTabs = {
     positions: { status: 'На позиции', title: 'На позиции', actions: [{label:'Переместить на склад', status:'WAREHOUSE', event:'Передача на склад'}] },
-    warehouse: { status: 'Склад', title: 'Склад', actions: [{label:'Передать в КИП', status:'KIP', event:'Передача в КИП'}] },
+    warehouse: { status: 'Склад', title: 'Склад', actions: [{label:'Передать в КИП', status:'KIP', event:'Передача в КИП'}, {label:'Списать', status:'WRITTEN_OFF', event:'Списание'}] },
     kip: { status: 'КИП', title: 'КИП', actions: [
         {label:'Вернуть на склад', status:'WAREHOUSE', event:'Возврат из КИП на склад'},
-        {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'}
+        {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'},
+        {label:'Списать', status:'WRITTEN_OFF', event:'Списание'}
     ] }
 };
 const workflowSelection = { positions: new Set(), warehouse: new Set(), kip: new Set() };
@@ -510,7 +543,7 @@ function initializeWorkflowTabs() {
         toolbar.className = 'toolbar workflow-toolbar';
         toolbar.innerHTML = `<input type="search" class="workflow-search" placeholder="Поиск по названию, зав. номеру или позиции…" aria-label="Поиск">
             <span class="workflow-selected-count">Выбрано: 0</span>
-            ${config.actions.map((act, i) => `<button type="button" class="btn-primary workflow-action" data-action-index="${i}" disabled>${act.label}</button>`).join('')}
+            ${config.actions.map((act, i) => `<button type="button" class="btn-primary workflow-action${act.status === 'WRITTEN_OFF' ? ' workflow-action-writeoff' : ''}" data-action-index="${i}" disabled>${act.label}</button>`).join('')}
             <button type="button" class="btn workflow-clear-selection">Снять выделение</button>`;
         const wrap = document.createElement('div');
         wrap.className = 'devices-table-scroll';
@@ -583,11 +616,13 @@ function initializeWorkflowTabs() {
             else delete workflowFilters[key]['__sort_' + col];
             renderWorkflowTab(key);
         }));
+        // Карточка прибора открывается только по нажатию на заводской номер,
+        // а не по любой ячейке строки (как во вкладке «Перемещения»).
         table.addEventListener('click', event => {
-            if (event.target.closest('input,select,button,label')) return;
-            const row = event.target.closest('tr[data-id]');
-            if (!row) return;
-            const device = state.devices.find(d => Number(d.id) === Number(row.dataset.id));
+            const serialLink = event.target.closest('[data-open-workflow-device]');
+            if (!serialLink) return;
+            const deviceId = Number(serialLink.dataset.openWorkflowDevice);
+            const device = state.devices.find(d => Number(d.id) === deviceId);
             if (device) openViewModal(device);
         });
     });
@@ -630,17 +665,22 @@ function renderWorkflowTab(key) {
     } else {
         rows.sort((a,b) => String(a.nextVerification || '9999').localeCompare(String(b.nextVerification || '9999')));
     }
-    table.querySelector('tbody').innerHTML = rows.map(d => `<tr data-id="${d.id}">
+    table.querySelector('tbody').innerHTML = rows.map(d => {
+        const ref = referencePositionForDevice(d);
+        const equipment = ref ? ref.equipment : d.groupName;
+        const positionName = ref ? ref.description : (d.positionName || d.name);
+        return `<tr data-id="${d.id}">
         <td class="workflow-select-cell"><input type="checkbox" class="workflow-device-check" data-id="${d.id}" aria-label="Выбрать прибор" ${workflowSelection[key].has(Number(d.id)) ? 'checked' : ''}></td>
-        <td>${escapeHtml(d.serialNumber || '—')}</td><td>${escapeHtml(d.location || '—')}</td>
+        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td><td>${escapeHtml(formatScale(d))}</td>
         <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
         <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
-        <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(d.groupName || '—')}</td>
-        <td>${escapeHtml(d.positionName || d.name || '—')}</td>
+        <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(equipment || '—')}</td>
+        <td>${escapeHtml(positionName || '—')}</td>
         <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
     const empty = host.querySelector('.workflow-empty');
     if (empty) empty.hidden = rows.length > 0;
     const selectAll = table.querySelector('.workflow-select-all');
@@ -677,7 +717,7 @@ async function moveSelectedDevices(fromTab, action) {
         showToast('Перемещение невозможно', 'Прибор, который уже находится на складе, нельзя повторно отправить на склад.', 'error');
         return;
     }
-    const targetLabel = action.status === 'INSTALLED' ? 'На позиции' : action.status === 'WAREHOUSE' ? 'Склад' : 'КИП';
+    const targetLabel = action.status === 'INSTALLED' ? 'На позиции' : action.status === 'WAREHOUSE' ? 'Склад' : action.status === 'WRITTEN_OFF' ? 'Списан' : 'КИП';
     if (!confirm(`Переместить выбранные приборы (${ids.length}) в раздел «${targetLabel}»?`)) return;
     beginLoading();
     let moved = 0, failed = [], successful = [];
@@ -688,7 +728,7 @@ async function moveSelectedDevices(fromTab, action) {
             const device = state.devices.find(d => Number(d.id) === id);
             if (!device) return { id, error: 'Прибор не найден в текущем списке' };
             const previousStatus = locationStatusOf(device);
-            const body = { ...device, workflowStatus: action.status, workflowMovedAt: new Date().toISOString(), version: Number(device.version || 0) };
+            const body = { ...device, workflowStatus: action.status, workflowMovedAt: new Date().toISOString(), writeOff: action.status === 'WRITTEN_OFF' ? (device.writeOff || new Date().toISOString().slice(0,10)) : (action.status === 'WAREHOUSE' || action.status === 'KIP' || action.status === 'INSTALLED' ? '' : device.writeOff), version: Number(device.version || 0) };
             try {
                 const response = await apiFetch('/api/devices/' + id, {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -790,10 +830,12 @@ function renderMovements(rows) {
         html += `<tr class="movement-date-row"><td colspan="8">${escapeHtml(date)} <span>${items.length} ${items.length === 1 ? 'перемещение' : 'перемещений'}</span></td></tr>`;
         html += items.map(m => `<tr>
             <td>${escapeHtml(formatDateTime(m.createdAt || m.eventDate))}</td>
-            <td>${Number(m.deviceCount || 1) > 1
-                ? `<strong>${escapeHtml(m.name || (m.deviceCount + ' прибора'))}</strong>`
-                : `<button type="button" class="btn-link" data-open-movement-device="${m.deviceId}">${escapeHtml(m.name || ('Прибор #' + m.deviceId))}</button>`}</td>
-            <td>${escapeHtml(m.serialNumber || '—')}</td>
+            <td><strong>${escapeHtml(m.name || (m.deviceCount + ' прибор'))}</strong></td>
+            <td>${String(m.deviceIds || m.deviceId || '').split(',').filter(Boolean).map((id, i) => {
+                const device = state.devices.find(d => Number(d.id) === Number(id));
+                const serial = device?.serialNumber || String(m.serialNumber || '').split(', ')[i] || ('Прибор #' + id);
+                return `<button type="button" class="btn-link serial-device-link" data-open-movement-device="${escapeHtml(id)}">${escapeHtml(serial)}</button>`;
+              }).join(', ') || escapeHtml(m.serialNumber || '—')}</td>
             <td>${escapeHtml(m.eventType || '—')}</td>
             <td>${escapeHtml(m.fromPlace || '—')}</td>
             <td>${escapeHtml(m.toPlace || '—')}</td>
@@ -837,7 +879,9 @@ async function renderAuditTab(limit = 200) {
             <td>${escapeHtml(r.who)}</td>
             <td>${escapeHtml(r.action)}</td>
             <td>${escapeHtml(r.name)}</td>
-            <td>${escapeHtml(r.serialNumber)}</td>
+            <td>${r.deviceId != null && r.serialNumber && r.serialNumber !== '—'
+                ? `<button type="button" class="btn-link serial-device-link" data-open-audit-device="${escapeHtml(r.deviceId)}">${escapeHtml(r.serialNumber)}</button>`
+                : escapeHtml(r.serialNumber)}</td>
             <td>${escapeHtml(r.details)}</td>
         </tr>`).join('');
         $('#emptyAudit').hidden = rows.length !== 0;
@@ -881,6 +925,90 @@ async function renderTrashTab() {
 }
 
 /* =========================================================
+ *  СПРАВОЧНИК ПОЗИЦИЙ ИЗ КНИГА1
+ * ========================================================= */
+const REFERENCE_POSITION_PAGE_SIZE = 100;
+function renderReferencePositions() {
+    const search = ($('#referencePositionSearch')?.value || '').trim().toLocaleLowerCase('ru-RU');
+    const filtered = state.referencePositions.filter(x => [x.position,x.description,x.equipment].join(' ').toLocaleLowerCase('ru-RU').includes(search));
+    const pages = Math.max(1, Math.ceil(filtered.length / REFERENCE_POSITION_PAGE_SIZE));
+    state.referencePositionPage = Math.min(state.referencePositionPage, pages - 1);
+    const start = state.referencePositionPage * REFERENCE_POSITION_PAGE_SIZE;
+    const pageRows = filtered.slice(start, start + REFERENCE_POSITION_PAGE_SIZE);
+    $('#referencePositionCount').textContent = `Найдено: ${filtered.length} из ${state.referencePositions.length}`;
+    $('#emptyReferencePositions').hidden = filtered.length !== 0;
+    $('#tableReferencePositions tbody').innerHTML = pageRows.map(x => {
+        const editing = state.editingReferencePositionId === x.id;
+        if (editing) return `<tr data-id="${x.id}">
+            <td><input class="reference-edit-field" data-field="position" value="${escapeHtml(x.position)}"></td>
+            <td><input class="reference-edit-field" data-field="description" value="${escapeHtml(x.description)}"></td>
+            <td><input class="reference-edit-field" data-field="equipment" value="${escapeHtml(x.equipment)}"></td>
+            <td><button class="btn-primary" data-ref-act="save">Сохранить</button> <button class="btn" data-ref-act="cancel">Отмена</button></td>
+        </tr>`;
+        const editAction = state.user && state.user.role !== 'guest' ? '<button class="btn-link" data-ref-act="edit">Редактировать</button>' : '<span class="muted">Только просмотр</span>';
+        const deleteAction = state.user && state.user.role !== 'guest' ? ' <button class="btn-link danger-link" data-ref-act="delete">Удалить</button>' : '';
+        return `<tr data-id="${x.id}"><td>${escapeHtml(x.position)}</td><td>${escapeHtml(x.description || '—')}</td><td>${escapeHtml(x.equipment || '—')}</td><td>${editAction}${deleteAction}</td></tr>`;
+    }).join('');
+    $('#referencePositionPager').innerHTML = `<button class="btn" data-ref-page="prev" ${state.referencePositionPage === 0 ? 'disabled' : ''}>← Назад</button><span class="muted">Страница ${state.referencePositionPage + 1} из ${pages}</span><button class="btn" data-ref-page="next" ${state.referencePositionPage >= pages - 1 ? 'disabled' : ''}>Вперёд →</button>`;
+}
+
+async function refreshReferencePositions() {
+    const r = await apiFetch('/api/reference-positions');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    state.referencePositions = await r.json();
+    state.referencePositionIndex = new Map(state.referencePositions.map(x => [normalizePositionCode(x.position), x]));
+    renderReferencePositions();
+    renderAllTab();
+}
+
+$('#referencePositionSearch')?.addEventListener('input', () => { state.referencePositionPage = 0; renderReferencePositions(); });
+$('#refreshReferencePositionsBtn')?.addEventListener('click', () => refreshReferencePositions().catch(e => showToast('Ошибка справочника позиций', e.message, 'error')));
+$('#tableReferencePositions')?.addEventListener('click', async e => {
+    const button = e.target.closest('button[data-ref-act]');
+    if (!button) return;
+    const row = button.closest('tr');
+    const id = Number(row.dataset.id);
+    if (button.dataset.refAct === 'edit') { state.editingReferencePositionId = id; renderReferencePositions(); return; }
+    if (button.dataset.refAct === 'delete') {
+        const item = state.referencePositions.find(x => x.id === id);
+        if (!confirm(`Удалить позицию «${item?.position || ''}» из справочника? Приборы с таким кодом останутся в базе, но больше не будут получать группу и наименование из справочника.`)) return;
+        button.disabled = true;
+        try {
+            const r = await apiFetch('/api/reference-positions/' + id, {method:'DELETE'});
+            const result = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(result.error || ('HTTP ' + r.status));
+            state.referencePositions = state.referencePositions.filter(x => x.id !== id);
+            state.referencePositionIndex = new Map(state.referencePositions.map(x => [normalizePositionCode(x.position), x]));
+            renderReferencePositions(); renderAllTab();
+            showToast('Позиция удалена', item?.position || '', 'ok');
+        } catch (err) { showToast('Ошибка удаления', err.message, 'error'); button.disabled = false; }
+        return;
+    }
+    if (button.dataset.refAct === 'cancel') { state.editingReferencePositionId = null; renderReferencePositions(); return; }
+    if (button.dataset.refAct === 'save') {
+        const payload = {};
+        row.querySelectorAll('[data-field]').forEach(input => payload[input.dataset.field] = input.value.trim());
+        button.disabled = true;
+        try {
+            const r = await apiFetch('/api/reference-positions/' + id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+            const result = await r.json();
+            if (!r.ok) throw new Error(result.error || ('HTTP ' + r.status));
+            const idx = state.referencePositions.findIndex(x => x.id === id);
+            if (idx >= 0) state.referencePositions[idx] = result;
+            state.referencePositionIndex = new Map(state.referencePositions.map(x => [normalizePositionCode(x.position), x]));
+            state.editingReferencePositionId = null;
+            renderReferencePositions(); renderAllTab();
+            showToast('Позиция сохранена', result.position, 'ok');
+        } catch (err) { showToast('Ошибка сохранения', err.message, 'error'); button.disabled = false; }
+    }
+});
+$('#referencePositionPager')?.addEventListener('click', e => {
+    const button = e.target.closest('button[data-ref-page]'); if (!button) return;
+    state.referencePositionPage += button.dataset.refPage === 'next' ? 1 : -1;
+    renderReferencePositions();
+});
+
+/* =========================================================
  *  РОУТИНГ
  * ========================================================= */
 function switchTab(tabName) {
@@ -901,6 +1029,7 @@ function switchTab(tabName) {
     if (tabName === 'audit') renderAuditTab(200);
     if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
     if (tabName === 'trash') renderTrashTab();
+    if (tabName === 'position-directory') renderReferencePositions();
     if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
     if (tabName === 'documents') {
         state.currentDocument = null;
@@ -922,7 +1051,7 @@ async function handleAppRoute() {
         return;
     }
 
-    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'documents', 'movements', 'audit', 'trash', 'help', 'users'];
+    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'documents', 'movements', 'audit', 'trash', 'position-directory', 'chart', 'help', 'users'];
     switchTab(allowedTabs.includes(hash) ? hash : 'all');
 }
 
@@ -1394,6 +1523,14 @@ if (resetBtn) {
 
 $('#refreshAuditBtn').addEventListener('click', () => renderAuditTab(200));
 $('#showAllAuditBtn').addEventListener('click', () => renderAuditTab(999999));
+$('#tableAudit')?.addEventListener('click', e => {
+    const btn = e.target.closest('[data-open-audit-device]');
+    if (!btn) return;
+    const id = Number(btn.dataset.openAuditDevice);
+    const device = state.devices.find(d => Number(d.id) === id);
+    if (device) openViewModal(device);
+    else showToast('Прибор', 'Карточка прибора не найдена в загруженном списке', 'info');
+});
 $('#refreshTrashBtn').addEventListener('click', renderTrashTab);
 
 function setFormValue(id, value) {
@@ -1401,13 +1538,40 @@ function setFormValue(id, value) {
     if (el) el.value = value == null ? '' : String(value);
 }
 
+function updateSelectedPositionPreview() {
+    const selectedId = $('#fLocation').value;
+    const ref = state.referencePositions.find(x => String(x.id) === String(selectedId));
+    $('#fPositionDescription').textContent = ref?.description || 'Не выбрана';
+    $('#fPositionEquipment').textContent = ref?.equipment || '—';
+}
+
+function populatePositionSelect(device) {
+    const select = $('#fLocation');
+    const linked = device?.referencePositionId != null
+        ? state.referencePositions.find(x => Number(x.id) === Number(device.referencePositionId))
+        : null;
+    const byCode = linked || state.referencePositionIndex.get(normalizePositionCode(device?.location));
+    select.innerHTML = '<option value="">— не выбрана —</option>' + state.referencePositions.map(x =>
+        `<option value="${escapeHtml(x.id)}">${escapeHtml(x.position)}</option>`
+    ).join('');
+    if (byCode) select.value = String(byCode.id);
+    else if (device?.location) {
+        // Сохраняем видимость старого значения, если его уже нет в справочнике.
+        const legacy = document.createElement('option');
+        legacy.value = '__legacy__';
+        legacy.textContent = `${device.location} (нет в справочнике)`;
+        select.appendChild(legacy);
+        select.value = '__legacy__';
+    }
+    updateSelectedPositionPreview();
+}
+
 function openModal(device) {
     $('#modalTitle').textContent = device ? 'Редактировать прибор' : 'Новый прибор';
     setFormValue('fId', device ? device.id : '');
     setFormValue('fVersion', device ? (device.version || 0) : 0);
     setFormValue('fSerial', device?.serialNumber);
-    setFormValue('fName', device?.positionName || device?.name);
-    setFormValue('fLocation', device?.location);
+    populatePositionSelect(device);
     setFormValue('fSensorType', device?.sensorType);
     setFormValue('fUnit', device?.unit);
     setFormValue('fScaleMin', device?.scaleMin);
@@ -1420,11 +1584,9 @@ function openModal(device) {
     setFormValue('fRedLine', device?.redLine);
     setFormValue('fWriteOff', device?.writeOff);
     setFormValue('fDeferredVerification', device?.deferredVerification);
-    setFormValue('fRowNumber', device?.rowNumber);
-    setFormValue('fGroupName', device?.groupName);
     setFormValue('fWorkflowStatus', device?.workflowStatus || (device?.writeOff ? 'WRITTEN_OFF' : (device?.location ? 'INSTALLED' : 'WAREHOUSE')));
     $('#copyDeviceBtn').hidden = !device;
-    $('#copyDeviceBtn').dataset.sourceId = device ? device.id : ''; 
+    $('#copyDeviceBtn').dataset.sourceId = device ? device.id : '';
 
     const prev = $('#photoPreview');
     const removeBtn = $('#removePhotoBtn');
@@ -1442,11 +1604,18 @@ function openModal(device) {
 }
 
 function collectDeviceFormData() {
+    const selectedId = $('#fLocation').value;
+    const ref = state.referencePositions.find(x => String(x.id) === String(selectedId));
+    const description = ref?.description || '';
+    const equipment = ref?.equipment || '';
+    const existing = state.devices.find(d => String(d.id) === String($('#fId').value));
+    const keepLegacy = selectedId === '__legacy__';
     return {
         serialNumber: $('#fSerial').value.trim(),
-        name: $('#fName').value.trim(),
-        positionName: $('#fName').value.trim(),
-        location: $('#fLocation').value.trim(),
+        name: description || (keepLegacy ? existing?.name : '') || existing?.name || 'Без позиции',
+        positionName: description || (keepLegacy ? existing?.positionName : '') || '',
+        location: ref?.position || (keepLegacy ? existing?.location : '') || '',
+        referencePositionId: ref ? Number(ref.id) : (keepLegacy ? (existing?.referencePositionId || '') : ''),
         sensorType: $('#fSensorType').value.trim(),
         unit: $('#fUnit').value.trim(),
         scaleMin: $('#fScaleMin').value.trim(),
@@ -1459,13 +1628,14 @@ function collectDeviceFormData() {
         redLine: $('#fRedLine').value.trim(),
         writeOff: $('#fWriteOff').value || '',
         deferredVerification: $('#fDeferredVerification').value.trim(),
-        rowNumber: $('#fRowNumber').value.trim(),
-        groupName: $('#fGroupName').value.trim(),
+        groupName: equipment || (keepLegacy ? existing?.groupName : '') || '',
         workflowStatus: $('#fWorkflowStatus').value,
         workflowMovedAt: state.devices.find(d => String(d.id) === String($('#fId').value))?.workflowMovedAt || '',
         version: parseInt($('#fVersion').value, 10) || 0
     };
 }
+
+$('#fLocation').addEventListener('change', updateSelectedPositionPreview);
 
 function closeModal() { $('#modal').hidden = true; }
 
@@ -1473,7 +1643,7 @@ $('#addBtn').addEventListener('click', () => openModal(null));
 $('#copyDeviceBtn').addEventListener('click', () => {
     const source = state.devices.find(d => String(d.id) === String($('#copyDeviceBtn').dataset.sourceId));
     if (!source) return;
-    const copy = { ...source, id: null, version: 0, serialNumber: '', location: '', rowNumber: '', groupName: '', positionName: '', name: source.positionName || source.name, workflowStatus: 'WAREHOUSE', writeOff: '', photoPath: null, photoThumbPath: null };
+    const copy = { ...source, id: null, version: 0, serialNumber: '', location: '', referencePositionId: '', positionName: '', groupName: '', rowNumber: '', workflowStatus: 'WAREHOUSE', workflowMovedAt: '', writeOff: '', photoPath: null, photoThumbPath: null };
     openModal(copy);
     setFormValue('fId', '');
     setFormValue('fVersion', 0);
@@ -1618,9 +1788,8 @@ function openViewModal(device) {
         ['Красная черта', device.redLine],
         ['Списание', device.writeOff],
         ['Отложенная поверка', device.deferredVerification],
-        ['Строка', device.rowNumber],
-        ['Группа', device.groupName],
-        ['Наименование позиции', device.positionName || device.name],
+        ['Группа', referencePositionForDevice(device)?.equipment || device.groupName],
+        ['Наименование позиции', referencePositionForDevice(device)?.description || device.positionName || device.name],
         ['Статус поверки', statusLabel(status)]
     ];
 
@@ -1812,6 +1981,34 @@ function printDeviceCard(device) {
 $('#viewPrintBtn').addEventListener('click', () => {
     if (!currentViewDevice) return;
     printDeviceCard(currentViewDevice);
+});
+
+/* Закрытие активного всплывающего окна клавишей Escape.
+   Работает для карточки прибора, редактирования, документов, входа
+   и остальных окон с общим классом .modal. */
+document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const openedModals = Array.from(document.querySelectorAll('.modal:not([hidden])'));
+    if (!openedModals.length) return;
+    event.preventDefault();
+    const activeModal = openedModals[openedModals.length - 1];
+    activeModal.hidden = true;
+    // Сброс временного состояния форм входа и добавления прибора в документ.
+    if (activeModal.id === 'passwordModal') {
+        const password = document.querySelector('#loginPassword');
+        const error = document.querySelector('#loginError');
+        if (password) password.value = '';
+        if (error) error.hidden = true;
+    }
+    if (activeModal.id === 'addDeviceDocumentModal') {
+        state.selectedDocumentDeviceId = null;
+        const search = document.querySelector('#documentDeviceSearch');
+        const selection = document.querySelector('#documentDeviceSelection');
+        const addButton = document.querySelector('#confirmAddDeviceDocument');
+        if (search) search.value = '';
+        if (selection) selection.textContent = 'Прибор не выбран';
+        if (addButton) addButton.disabled = true;
+    }
 });
 
 /* =========================================================
