@@ -51,7 +51,11 @@ body {
     display: inline-block;
 }
 .tab:hover { color: var(--text); }
-.tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+ .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; position: relative; box-shadow: inset 0 -3px 0 var(--accent); }
+/* Активная вкладка должна быть хорошо видна даже на цветных вкладках Склад/КИП/На позиции */
+.tabs .tab[data-tab="positions"].active,
+.tabs .tab[data-tab="warehouse"].active,
+.tabs .tab[data-tab="kip"].active { box-shadow: inset 0 -4px 0 rgba(255,255,255,.95); }
 .tab[hidden], .tab-panel[hidden] { display: none !important; }
 
 .badge {
@@ -927,3 +931,18 @@ button[data-busy="1"] .btn-spinner {
 @media (max-width: 600px) {
     .position-reference-preview { grid-template-columns: 1fr; }
 }
+/* Movement management rows */
+.movement-open-row { cursor: pointer; }
+.movement-open-row:hover { background: var(--hover, rgba(120,140,180,.10)); }
+#movementManageModal .modal-content { max-height: 92vh; overflow: auto; }
+#movementManageTable td:first-child, #movementManageTable th:first-child { width: 42px; text-align: center; }
+/* Ярко отмечаем приборы, только что отправленные с позиции на склад. */
+.workflow-recently-moved td {
+    background: rgba(34, 197, 94, .20) !important;
+    box-shadow: inset 0 1px 0 rgba(34, 197, 94, .18), inset 0 -1px 0 rgba(34, 197, 94, .18);
+}
+.workflow-recently-moved td:first-child {
+    border-left: 3px solid #22c55e;
+}
+/* Warehouse arrival timestamp column */
+.warehouse-date-column { white-space: nowrap; min-width: 150px; color: var(--text-dim, #9aa7bd); }

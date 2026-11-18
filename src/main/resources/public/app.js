@@ -82,6 +82,13 @@ function formatDateTime(dtStr) {
     return dtStr;
 }
 
+function formatWorkflowTimestamp(value) {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return formatDateTime(String(value).replace('T', ' ')) || String(value);
+}
+
 function locationStatusOf(d) {
     const value = d.workflowStatus;
     if (value === 'WRITTEN_OFF' || d.writeOff) return 'Списан';
@@ -531,6 +538,7 @@ const workflowTabs = {
     ] }
 };
 const workflowSelection = { positions: new Set(), warehouse: new Set(), kip: new Set() };
+const recentlyMovedToWarehouse = new Set();
 const workflowFilters = { positions: {}, warehouse: {}, kip: {} };
 
 function initializeWorkflowTabs() {
@@ -560,12 +568,23 @@ function initializeWorkflowTabs() {
             sel.dataset.workflowTab = key;
         });
         table.querySelectorAll('thead tr').forEach((tr, index) => {
+            // Вкладки «На позиции», «Склад», «КИП»: статус не дублируем в таблице.
+            if (tr.children.length) tr.removeChild(tr.lastElementChild);
             const th = document.createElement('th');
             th.className = 'workflow-select-cell';
             th.innerHTML = index === 0
                 ? `<input type="checkbox" class="workflow-select-all" aria-label="Выбрать все видимые приборы">`
                 : '';
             tr.prepend(th);
+            if (key === 'warehouse' && index === 0) {
+                const dateTh = document.createElement('th');
+                dateTh.className = 'warehouse-date-column';
+                dateTh.textContent = 'Дата поступления на склад';
+                // Дата располагается после колонки «Тип датчика».
+                const sensorHeader = [...tr.children].find(el => el.textContent.trim() === 'Тип датчика');
+                if (sensorHeader) sensorHeader.after(dateTh);
+                else tr.appendChild(dateTh);
+            }
         });
         wrap.appendChild(table);
         const empty = document.createElement('div');
@@ -575,7 +594,7 @@ function initializeWorkflowTabs() {
 
         toolbar.querySelector('.workflow-search').addEventListener('input', debounce(() => renderWorkflowTab(key), 180));
         toolbar.querySelector('.workflow-clear-selection').addEventListener('click', () => {
-            workflowSelection[key].clear();
+            clearWorkflowTabSelection(key);
             renderWorkflowTab(key);
         });
         toolbar.querySelectorAll('.workflow-action').forEach(btn => btn.addEventListener('click', () => {
@@ -636,6 +655,15 @@ function renderWorkflowTab(key) {
     if (!table) return;
     const query = (host.querySelector('.workflow-search')?.value || '').toLowerCase().trim();
     const filters = workflowFilters[key];
+    // Последняя складская партия определяется по сохранённому сервером workflowMovedAt.
+    let latestWarehouseStamp = '';
+    if (key === 'warehouse') {
+        latestWarehouseStamp = state.devices.filter(d => locationStatusOf(d) === 'Склад' && d.workflowMovedAt)
+            .map(d => String(d.workflowMovedAt)).sort().pop() || '';
+        recentlyMovedToWarehouse.clear();
+        if (latestWarehouseStamp) state.devices.filter(d => locationStatusOf(d) === 'Склад' && String(d.workflowMovedAt) === latestWarehouseStamp)
+            .forEach(d => recentlyMovedToWarehouse.add(Number(d.id)));
+    }
     let rows = state.devices.filter(device => {
         if (locationStatusOf(device) !== config.status) return false;
         if (query && ![device.name,device.location,device.serialNumber,device.sensorType,device.unit,device.category,device.groupName,device.positionName,device.redLine].join(' ').toLowerCase().includes(query)) return false;
@@ -669,16 +697,15 @@ function renderWorkflowTab(key) {
         const ref = referencePositionForDevice(d);
         const equipment = ref ? ref.equipment : d.groupName;
         const positionName = ref ? ref.description : (d.positionName || d.name);
-        return `<tr data-id="${d.id}">
+        return `<tr data-id="${d.id}" class="${key === 'warehouse' && recentlyMovedToWarehouse.has(Number(d.id)) ? 'workflow-recently-moved' : ''}">
         <td class="workflow-select-cell"><input type="checkbox" class="workflow-device-check" data-id="${d.id}" aria-label="Выбрать прибор" ${workflowSelection[key].has(Number(d.id)) ? 'checked' : ''}></td>
         <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
-        <td>${escapeHtml(d.sensorType || '—')}</td><td>${escapeHtml(formatScale(d))}</td>
+        <td>${escapeHtml(d.sensorType || '—')}</td>${key === 'warehouse' ? `<td class="warehouse-date-column">${escapeHtml(formatWorkflowTimestamp(d.workflowMovedAt))}</td>` : ''}<td>${escapeHtml(formatScale(d))}</td>
         <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
         <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(equipment || '—')}</td>
         <td>${escapeHtml(positionName || '—')}</td>
-        <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`;
     }).join('');
     const empty = host.querySelector('.workflow-empty');
@@ -692,6 +719,21 @@ function renderWorkflowTab(key) {
     updateWorkflowToolbar(key);
 }
 
+function clearWorkflowTabSelection(key) {
+    workflowSelection[key].clear();
+    const host = document.querySelector(`[data-workflow-tab="${key}"]`);
+    if (host) {
+        host.querySelectorAll('.workflow-device-check, .workflow-select-all').forEach(cb => {
+            cb.checked = false;
+            cb.indeterminate = false;
+        });
+        const count = host.querySelector('.workflow-selected-count');
+        if (count) count.textContent = 'Выбрано: 0';
+        host.querySelectorAll('.workflow-action').forEach(btn => { btn.disabled = true; });
+    }
+}
+
+
 function updateWorkflowToolbar(key) {
     const host = document.querySelector(`[data-workflow-tab="${key}"]`);
     if (!host) return;
@@ -699,17 +741,17 @@ function updateWorkflowToolbar(key) {
     host.querySelector('.workflow-selected-count').textContent = `Выбрано: ${selected}`;
     host.querySelectorAll('.workflow-action').forEach(btn => {
         const action = workflowTabs[key].actions[Number(btn.dataset.actionIndex)];
-        const overWarehouseLimit = action?.status === 'WAREHOUSE' && selected > 20;
-        btn.disabled = selected === 0 || overWarehouseLimit;
-        btn.title = overWarehouseLimit ? 'На склад можно переместить не более 20 приборов за одну операцию' : '';
+        const overBatchLimit = selected > 50;
+        btn.disabled = selected === 0 || overBatchLimit;
+        btn.title = overBatchLimit ? 'За одну операцию можно переместить не более 50 приборов' : '';
     });
 }
 
 async function moveSelectedDevices(fromTab, action) {
     const ids = [...workflowSelection[fromTab]];
     if (!ids.length) return;
-    if (action.status === 'WAREHOUSE' && ids.length > 20) {
-        showToast('Превышен лимит', 'На склад можно переместить не более 20 приборов за одну операцию. Снимите выделение с лишних приборов.', 'error');
+    if (ids.length > 50) {
+        showToast('Превышен лимит перемещения', `За одну операцию разрешено перемещать не более 50 приборов. Сейчас выбрано: ${ids.length}. Снимите выделение с лишних приборов.`, 'error');
         return;
     }
     const selectedDevices = ids.map(id => state.devices.find(d => Number(d.id) === id)).filter(Boolean);
@@ -718,8 +760,8 @@ async function moveSelectedDevices(fromTab, action) {
         return;
     }
     const targetLabel = action.status === 'INSTALLED' ? 'На позиции' : action.status === 'WAREHOUSE' ? 'Склад' : action.status === 'WRITTEN_OFF' ? 'Списан' : 'КИП';
-    if (!confirm(`Переместить выбранные приборы (${ids.length}) в раздел «${targetLabel}»?`)) return;
     beginLoading();
+    const batchMovedAt = new Date().toISOString();
     let moved = 0, failed = [], successful = [];
     try {
         // Отправляем изменения одним пакетом параллельных запросов и не перерисовываем таблицы
@@ -728,7 +770,7 @@ async function moveSelectedDevices(fromTab, action) {
             const device = state.devices.find(d => Number(d.id) === id);
             if (!device) return { id, error: 'Прибор не найден в текущем списке' };
             const previousStatus = locationStatusOf(device);
-            const body = { ...device, workflowStatus: action.status, workflowMovedAt: new Date().toISOString(), writeOff: action.status === 'WRITTEN_OFF' ? (device.writeOff || new Date().toISOString().slice(0,10)) : (action.status === 'WAREHOUSE' || action.status === 'KIP' || action.status === 'INSTALLED' ? '' : device.writeOff), version: Number(device.version || 0) };
+            const body = { ...device, workflowStatus: action.status, workflowMovedAt: batchMovedAt, writeOff: action.status === 'WRITTEN_OFF' ? (device.writeOff || new Date().toISOString().slice(0,10)) : (action.status === 'WAREHOUSE' || action.status === 'KIP' || action.status === 'INSTALLED' ? '' : device.writeOff), version: Number(device.version || 0) };
             try {
                 const response = await apiFetch('/api/devices/' + id, {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -770,8 +812,18 @@ async function moveSelectedDevices(fromTab, action) {
             }
         }
 
-        workflowSelection[fromTab].clear();
-        render();
+        // Сбрасываем выбор и в Set, и в DOM. Для операции «Склад → КИП»
+        // очищаем весь склад, чтобы оставшиеся строки не сохраняли старые галочки.
+        clearWorkflowTabSelection(fromTab);
+        if (fromTab === 'warehouse' && action.status === 'KIP') {
+            clearWorkflowTabSelection('warehouse');
+        }
+        if (moved && fromTab === 'positions' && action.status === 'WAREHOUSE') {
+            successful.forEach(item => { recentlyMovedToWarehouse.add(Number(item.id)); workflowSelection.warehouse.add(Number(item.id)); });
+            render();
+            window.location.hash = 'warehouse';
+            switchTab('warehouse');
+        } else render();
         if (moved) showToast('Перемещение выполнено', `Перемещено приборов: ${moved} одной операцией`, 'success');
         if (failed.length) showToast('Есть ошибки', failed.slice(0, 3).join('; '), 'error');
     } finally {
@@ -805,6 +857,7 @@ async function loadMovements(loadAll = movementsLoadAll) {
         if (r.status === 401) return;
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const rows = await r.json();
+        state.movements = rows;
         renderMovements(rows);
         $('#loadAllMovementsBtn').hidden = movementsLoadAll;
         $('#loadRecentMovementsBtn').hidden = !movementsLoadAll;
@@ -820,33 +873,68 @@ async function loadMovements(loadAll = movementsLoadAll) {
 function renderMovements(rows) {
     const tbody = $('#tableMovements tbody');
     const groups = new Map();
-    rows.forEach(m => {
-        const key = movementDateKey(m.eventDate);
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(m);
-    });
+    rows.forEach(m => { const key = movementDateKey(m.eventDate); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(m); });
     let html = '';
     for (const [date, items] of groups) {
         html += `<tr class="movement-date-row"><td colspan="8">${escapeHtml(date)} <span>${items.length} ${items.length === 1 ? 'перемещение' : 'перемещений'}</span></td></tr>`;
-        html += items.map(m => `<tr>
-            <td>${escapeHtml(formatDateTime(m.createdAt || m.eventDate))}</td>
-            <td><strong>${escapeHtml(m.name || (m.deviceCount + ' прибор'))}</strong></td>
-            <td>${String(m.deviceIds || m.deviceId || '').split(',').filter(Boolean).map((id, i) => {
-                const device = state.devices.find(d => Number(d.id) === Number(id));
-                const serial = device?.serialNumber || String(m.serialNumber || '').split(', ')[i] || ('Прибор #' + id);
-                return `<button type="button" class="btn-link serial-device-link" data-open-movement-device="${escapeHtml(id)}">${escapeHtml(serial)}</button>`;
-              }).join(', ') || escapeHtml(m.serialNumber || '—')}</td>
-            <td>${escapeHtml(m.eventType || '—')}</td>
-            <td>${escapeHtml(m.fromPlace || '—')}</td>
-            <td>${escapeHtml(m.toPlace || '—')}</td>
-            <td>${escapeHtml(m.note || '—')}</td>
-            <td>${escapeHtml(m.createdBy || '—')}</td>
-        </tr>`).join('');
+        html += items.map(m => `<tr class="movement-open-row" data-open-movement="${escapeHtml(m.id)}" tabindex="0" title="Открыть управление перемещением">
+            <td>${escapeHtml(formatDateTime(m.createdAt || m.eventDate))}</td><td><strong>${escapeHtml(m.name || (m.deviceCount + ' прибор'))}</strong></td>
+            <td>${escapeHtml((m.deviceIds || m.deviceId || '').split(',').filter(Boolean).map((id, i) => { const d = state.devices.find(x => Number(x.id) === Number(id)); return d?.serialNumber || String(m.serialNumber || '').split(', ')[i] || ('Прибор #' + id); }).join(', ') || m.serialNumber || '—')}</td>
+            <td>${escapeHtml(m.eventType || '—')}</td><td>${escapeHtml(m.fromPlace || '—')}</td><td>${escapeHtml(m.toPlace || '—')}</td><td>${escapeHtml(m.note || '—')}</td><td>${escapeHtml(m.createdBy || '—')}</td></tr>`).join('');
     }
-    tbody.innerHTML = html;
-    $('#emptyMovements').hidden = rows.length !== 0;
+    tbody.innerHTML = html; $('#emptyMovements').hidden = rows.length !== 0;
 }
 
+let currentMovementForManage = null;
+function openMovementManage(m) {
+    currentMovementForManage = m;
+    const ids = String(m.deviceIds || m.deviceId || '').split(',').filter(Boolean).map(Number);
+    $('#movementManageTitle').textContent = `${m.eventType || 'Перемещение'} — ${ids.length} прибор(ов)`;
+    $('#movementManageInfo').textContent = `${formatDateTime(m.createdAt || m.eventDate)} | ${m.fromPlace || '—'} → ${m.toPlace || '—'}${m.note ? ' | ' + m.note : ''}`;
+    const body = $('#movementManageTable tbody');
+    body.innerHTML = ids.map(id => { const d = state.devices.find(x => Number(x.id) === id); return `<tr><td><input type="checkbox" class="movement-device-select" value="${id}"></td><td>${escapeHtml(d?.serialNumber || ('ID ' + id))}</td><td>${escapeHtml(d?.sensorType || '—')}</td><td>${escapeHtml(d?.positionName || d?.location || '—')}</td></tr>`; }).join('');
+    $('#movementSelectAll').checked = false; $('#movementManageModal').hidden = false;
+}
+$('#tableMovements')?.addEventListener('click', e => { const row = e.target.closest('[data-open-movement]'); if (!row) return; const movementId = Number(row.dataset.openMovement); const movement = (state.movements || []).find(x => Number(x.id) === movementId); if (movement) openMovementManage(movement); });
+$('#movementManageClose')?.addEventListener('click', () => $('#movementManageModal').hidden = true);
+$('#movementSelectAll')?.addEventListener('change', e => document.querySelectorAll('#movementManageTable .movement-device-select').forEach(cb => cb.checked = e.target.checked));
+document.getElementById('movementPrint')?.addEventListener('click', () => {
+    if (!currentMovementForManage) return;
+    const m = currentMovementForManage;
+    const ids = String(m.deviceIds || m.deviceId || '').split(',').filter(Boolean).map(Number);
+    const devices = ids.map(id => state.devices.find(d => Number(d.id) === id)).filter(Boolean);
+    const rows = devices.map((d, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(d.serialNumber || '—')}</td><td>${escapeHtml(d.sensorType || '—')}</td><td>${escapeHtml(d.positionName || d.location || '—')}</td></tr>`).join('');
+    const w = window.open('', '_blank');
+    if (!w) { showToast('Печать', 'Разрешите открытие всплывающего окна для печати.', 'warning'); return; }
+    w.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Перемещение</title><style>body{font:14px Arial;margin:24px;color:#111}h1{font-size:20px}table{border-collapse:collapse;width:100%;margin-top:18px}th,td{border:1px solid #777;padding:7px;text-align:left}th{background:#eee}.meta{margin:8px 0} @media print{button{display:none}}</style></head><body><h1>Список приборов перемещения</h1><div class="meta"><b>Дата:</b> ${escapeHtml(formatDateTime(m.createdAt || m.eventDate))}</div><div class="meta"><b>Операция:</b> ${escapeHtml(m.eventType || '—')}</div><div class="meta"><b>Откуда:</b> ${escapeHtml(m.fromPlace || '—')} &nbsp; <b>Куда:</b> ${escapeHtml(m.toPlace || '—')}</div><div class="meta"><b>Примечание:</b> ${escapeHtml(m.note || '—')}</div><table><thead><tr><th>№</th><th>Зав. номер</th><th>Тип датчика</th><th>Позиция</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=()=>window.print();<\/script></body></html>`);
+    w.document.close();
+});
+async function cancelMovementDevices(all = false) {
+    if (!currentMovementForManage) return;
+    const m = currentMovementForManage;
+    const allIds = String(m.deviceIds || m.deviceId || '').split(',').filter(Boolean).map(Number);
+    const selected = all ? allIds : [...document.querySelectorAll('#movementManageTable .movement-device-select:checked')].map(cb => Number(cb.value));
+    if (!selected.length) { showToast('Отмена перемещения', 'Выберите приборы для отмены.', 'warning'); return; }
+    beginLoading();
+    try {
+        const response = await apiFetch('/api/movements/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batchId:m.batchId || '',movementId:Number(m.id || 0),deviceIds:selected})});
+        const data = await response.json().catch(()=>({}));
+        if (!response.ok) throw new Error(data.error || data.message || `HTTP ${response.status}`);
+        showToast('Отмена перемещения', `Отменено приборов: ${data.cancelled || selected.length}`, 'success');
+        await Promise.all([loadDevices(), loadMovements(movementsLoadAll)]);
+        if (all || selected.length === allIds.length) $('#movementManageModal').hidden = true;
+        else {
+            const remaining = allIds.filter(id => !selected.includes(id));
+            m.deviceIds = remaining.join(','); m.deviceCount = remaining.length;
+            openMovementManage(m);
+        }
+        render();
+    } catch (err) { showToast('Ошибка отмены', err.message || String(err), 'error'); }
+    finally { finishLoading(); }
+}
+document.getElementById('movementRemoveSelected')?.addEventListener('click', () => cancelMovementDevices(false));
+document.getElementById('movementCancelAll')?.addEventListener('click', () => cancelMovementDevices(true));
+$('#movementManageModal')?.addEventListener('click', e => { if (e.target.id === 'movementManageModal') e.currentTarget.hidden = true; });
 $('#loadAllMovementsBtn')?.addEventListener('click', () => loadMovements(true).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error')));
 $('#loadRecentMovementsBtn')?.addEventListener('click', () => loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error')));
 $('#searchMovements')?.addEventListener('input', () => {
@@ -971,7 +1059,6 @@ $('#tableReferencePositions')?.addEventListener('click', async e => {
     if (button.dataset.refAct === 'edit') { state.editingReferencePositionId = id; renderReferencePositions(); return; }
     if (button.dataset.refAct === 'delete') {
         const item = state.referencePositions.find(x => x.id === id);
-        if (!confirm(`Удалить позицию «${item?.position || ''}» из справочника? Приборы с таким кодом останутся в базе, но больше не будут получать группу и наименование из справочника.`)) return;
         button.disabled = true;
         try {
             const r = await apiFetch('/api/reference-positions/' + id, {method:'DELETE'});
@@ -1257,7 +1344,6 @@ $('#tableUsers').addEventListener('click', async e => {
     if (!btn) return;
     const id = Number(btn.dataset.deleteUser);
     const name = btn.dataset.userName || 'пользователя';
-    if (!confirm(`Удалить пользователя «${name}»? Его активные сессии будут завершены.`)) return;
     const r = await apiFetch('/api/users/' + id, {method:'DELETE'});
     if (!r.ok) {
         const err = await r.json().catch(()=>({}));
@@ -1418,7 +1504,7 @@ $('#backToDocumentsBtn').addEventListener('click', closeDocumentWorkspace);
 $('#editDocumentBtn').addEventListener('click', () => state.currentDocument && openDocumentForm(state.currentDocument));
 $('#deleteDocumentBtn').addEventListener('click', async () => {
     const d = state.currentDocument;
-    if (!d || !confirm('Удалить документ «' + d.title + '»? Приборы останутся в общей базе.')) return;
+    if (!d) return;
     const r = await apiFetch('/api/documents/' + d.id, {method:'DELETE'});
     if (!r.ok) { showToast('Ошибка удаления документа', 'HTTP ' + r.status, 'error'); return; }
     state.currentDocument = null;
@@ -1470,7 +1556,6 @@ $('#tableDocumentDevices').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-unlink-device]');
     if (!btn || !state.currentDocument) return;
     const id = Number(btn.dataset.unlinkDevice);
-    if (!confirm('Убрать прибор из документа? Сам прибор останется в общей базе.')) return;
     const r = await apiFetch(`/api/documents/${state.currentDocument.id}/devices/${id}`, {method:'DELETE'});
     if (!r.ok) { showToast('Ошибка', 'HTTP ' + r.status, 'error'); return; }
     state.currentDocument = await r.json(); renderDocumentWorkspace(); await loadDocuments();
@@ -1614,7 +1699,9 @@ function collectDeviceFormData() {
         serialNumber: $('#fSerial').value.trim(),
         name: description || (keepLegacy ? existing?.name : '') || existing?.name || 'Без позиции',
         positionName: description || (keepLegacy ? existing?.positionName : '') || '',
-        location: ref?.position || (keepLegacy ? existing?.location : '') || '',
+        location: $('#fWorkflowStatus').value === 'INSTALLED'
+            ? (ref?.position || (keepLegacy ? existing?.location : '') || '')
+            : '',
         referencePositionId: ref ? Number(ref.id) : (keepLegacy ? (existing?.referencePositionId || '') : ''),
         sensorType: $('#fSensorType').value.trim(),
         unit: $('#fUnit').value.trim(),
@@ -1626,7 +1713,7 @@ function collectDeviceFormData() {
         nextVerification: $('#fNext').value || '',
         accuracyClass: $('#fAccuracyClass').value.trim(),
         redLine: $('#fRedLine').value.trim(),
-        writeOff: $('#fWriteOff').value || '',
+        writeOff: $('#fWorkflowStatus').value === 'WRITTEN_OFF' ? ($('#fWriteOff').value || '') : '',
         deferredVerification: $('#fDeferredVerification').value.trim(),
         groupName: equipment || (keepLegacy ? existing?.groupName : '') || '',
         workflowStatus: $('#fWorkflowStatus').value,
@@ -1659,7 +1746,6 @@ $('#removePhotoBtn').addEventListener('click', async (e) => {
     const id = $('#fId').value;
     if (!id) return;
 
-    if (!confirm('Удалить фотографию этого прибора?')) return;
 
     beginLoading();
     try {
@@ -1878,7 +1964,6 @@ $('#viewCloseBtn2').addEventListener('click', closeViewModal);
 $('#viewDeleteBtn').addEventListener('click', async () => {
     if (!currentViewDevice) return;
     const d = currentViewDevice;
-    if (!confirm('Переместить прибор «' + (d.name || '') + '» в корзину?')) return;
 
     beginLoading();
     try {
@@ -1914,7 +1999,6 @@ $('#tableTrash').addEventListener('click', async e => {
 
     if (btn.dataset.act === 'restore') {
         const id = parseInt(btn.dataset.id, 10);
-        if (!confirm('Восстановить этот прибор?')) return;
 
         beginLoading();
         try {

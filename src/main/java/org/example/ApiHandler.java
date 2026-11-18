@@ -288,6 +288,15 @@ public class ApiHandler implements HttpHandler {
                 return;
             }
 
+            if (path.equals("/api/movements/cancel")) {
+                if (!"POST".equals(method)) { methodNotAllowed(ex); return; }
+                JSONObject body = readJson(ex); JSONArray ids = body.optJSONArray("deviceIds");
+                String batchId = body.optString("batchId", ""); long movementId = body.optLong("movementId", 0);
+                if (ids == null || ids.length() == 0 || (batchId.isBlank() && movementId <= 0)) { sendJson(ex,400,new JSONObject().put("error","Укажите перемещение и приборы для отмены")); return; }
+                int count = Db.cancelMovement(batchId, movementId, ids);
+                sendJson(ex,200,new JSONObject().put("cancelled",count)); return;
+            }
+
             if (path.equals("/api/movements") && "GET".equals(method)) {
                 String search = "";
                 boolean all = false;
@@ -681,6 +690,9 @@ public class ApiHandler implements HttpHandler {
         JSONObject details = new JSONObject();
         String[] keys = {"sensorType","unit","scaleMin","scaleMax","category","mpi","accuracyClass","redLine","writeOff","deferredVerification","movement","rowNumber","groupName","positionName","workflowStatus","workflowMovedAt","referencePositionId"};
         for (String key : keys) if (o.has(key)) details.put(key, o.opt(key));
+        // Поле даты списания не должно случайно переводить обычный прибор в статус «Списан».
+        String workflowStatus = details.optString("workflowStatus", "WAREHOUSE");
+        if (!"WRITTEN_OFF".equals(workflowStatus)) details.put("writeOff", "");
         d.detailsJson = details.toString(); return d;
     }
 

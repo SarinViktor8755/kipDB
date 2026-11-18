@@ -25,7 +25,6 @@
     <a href="#positions" class="tab" data-tab="positions">На позиции</a>
     <a href="#warehouse" class="tab" data-tab="warehouse">Склад</a>
     <a href="#kip" class="tab" data-tab="kip">КИП</a>
-    <a href="#documents" class="tab" data-tab="documents">Документы</a>
     <a href="#movements" class="tab" data-tab="movements">Перемещения</a>
     <a href="#audit" class="tab" data-tab="audit">Журнал</a>
     <a href="#trash" class="tab" data-tab="trash">Корзина</a>
@@ -194,6 +193,20 @@
             <div id="documentDeviceSearchResults" class="device-search-results" role="listbox" aria-label="Результаты поиска приборов"></div>
             <div id="documentDeviceSelection" class="muted">Прибор не выбран</div>
             <div class="modal-actions"><button id="cancelAddDeviceDocument" type="button" class="btn">Отмена</button><button id="confirmAddDeviceDocument" type="button" class="btn-primary" disabled>Добавить</button></div>
+        </div>
+    </div>
+
+    <div id="movementManageModal" class="modal" hidden>
+        <div class="modal-content" style="width:min(1100px,96vw)">
+            <div class="modal-header"><h2 id="movementManageTitle">Перемещение</h2><button id="movementManageClose" class="btn-link" type="button">✕</button></div>
+            <div id="movementManageInfo" class="muted" style="margin-bottom:12px"></div>
+            <div class="toolbar" style="flex-wrap:wrap">
+                <button id="movementPrint" class="btn" type="button">Печатать</button>
+                <button id="movementRemoveSelected" class="btn" type="button">Убрать из перемещения выбранные</button>
+                <button id="movementCancelAll" class="btn-danger" type="button" style="margin-left:auto">Отменить перемещение целиком</button>
+            </div>
+            <div class="table-loading-wrap"><table class="devices" id="movementManageTable"><thead><tr><th><input id="movementSelectAll" type="checkbox" aria-label="Выбрать все"></th><th>Зав. номер</th><th>Тип датчика</th><th>Позиция</th></tr></thead><tbody></tbody></table></div>
+            <div id="movementManageHint" class="muted" style="margin-top:10px">Выберите приборы для исключения из перемещения. Печать формирует общий список приборов текущего перемещения.</div>
         </div>
     </div>
 

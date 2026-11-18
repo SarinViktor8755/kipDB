@@ -596,7 +596,12 @@ public class Db {
                         id = rs.getLong(1);
                     }
                 }
-                log(c, id, user, "CREATE", "name=" + d.name + ", sn=" + d.serialNumber);
+                String workflowStatus = "WAREHOUSE";
+                try {
+                    JSONObject details = new JSONObject(d.detailsJson == null ? "{}" : d.detailsJson);
+                    workflowStatus = details.optString("workflowStatus", "WAREHOUSE");
+                } catch (Exception ignored) { }
+                log(c, id, user, "CREATE", "name=" + d.name + ", sn=" + d.serialNumber + ", status=" + workflowStatus);
                 c.commit();
                 return id;
             } catch (SQLException e) {
@@ -1167,6 +1172,57 @@ public class Db {
             } catch (SQLException e) { c.rollback(); throw e; }
             finally { c.setAutoCommit(true); }
         }
+    }
+
+
+    /** Cancels selected devices from a movement group and restores their previous workflow status. */
+    public static int cancelMovement(String batchId, long movementId, JSONArray deviceIds) throws SQLException {
+        if (deviceIds == null || deviceIds.length() == 0) throw new SQLException("Не выбраны приборы для отмены");
+        try (Connection c = DriverManager.getConnection(DB_URL)) {
+            c.setAutoCommit(false);
+            try {
+                int cancelled = 0;
+                for (int i = 0; i < deviceIds.length(); i++) {
+                    long deviceId = deviceIds.getLong(i);
+                    String fromPlace;
+                    long movementRowId;
+                    try (PreparedStatement ps = c.prepareStatement(batchId != null && !batchId.isBlank()
+                            ? "SELECT id,from_place FROM device_movements WHERE device_id=? AND batch_id=? ORDER BY id DESC LIMIT 1"
+                            : "SELECT id,from_place FROM device_movements WHERE device_id=? AND id=?")) {
+                        ps.setLong(1, deviceId);
+                        if (batchId != null && !batchId.isBlank()) ps.setString(2, batchId); else ps.setLong(2, movementId);
+                        try (ResultSet rs = ps.executeQuery()) { if (!rs.next()) throw new SQLException("Прибор " + deviceId + " не входит в это перемещение"); movementRowId=rs.getLong(1); fromPlace=rs.getString(2); }
+                    }
+                    // Отменяем только последнее перемещение прибора, чтобы не откатывать состояние поверх более новых операций.
+                    try (PreparedStatement ps=c.prepareStatement("SELECT id FROM device_movements WHERE device_id=? ORDER BY id DESC LIMIT 1")) {
+                        ps.setLong(1, deviceId); try (ResultSet rs=ps.executeQuery()) { if (!rs.next() || rs.getLong(1)!=movementRowId) throw new SQLException("Прибор " + deviceId + " уже участвовал в более позднем перемещении. Отмена невозможна."); }
+                    }
+                    if (fromPlace != null && fromPlace.contains(",")) throw new SQLException("В перемещении указаны разные исходные статусы; отмена неоднозначна для прибора " + deviceId);
+                    String status = previousStatusCode(fromPlace);
+                    if (status == null) throw new SQLException("Не удалось определить предыдущий статус для прибора " + deviceId + " (" + fromPlace + ")");
+                    String detailsJson;
+                    try (PreparedStatement ps=c.prepareStatement("SELECT details_json FROM devices WHERE id=? AND is_deleted=0")) { ps.setLong(1,deviceId); try(ResultSet rs=ps.executeQuery()) { if(!rs.next()) throw new SQLException("Прибор " + deviceId + " не найден"); detailsJson=rs.getString(1); } }
+                    JSONObject details = new JSONObject(detailsJson == null || detailsJson.isBlank() ? "{}" : detailsJson);
+                    details.put("workflowStatus", status); details.remove("workflowMovedAt");
+                    if (!"WRITTEN_OFF".equals(status)) details.put("writeOff", "");
+                    try (PreparedStatement ps=c.prepareStatement("UPDATE devices SET details_json=?,version=version+1 WHERE id=?")) { ps.setString(1,details.toString()); ps.setLong(2,deviceId); ps.executeUpdate(); }
+                    try (PreparedStatement ps=c.prepareStatement("DELETE FROM device_movements WHERE id=? AND device_id=?")) { ps.setLong(1,movementRowId); ps.setLong(2,deviceId); if(ps.executeUpdate()!=1) throw new SQLException("Не удалось удалить запись перемещения прибора " + deviceId); }
+                    log(c,deviceId,"system","MOVEMENT_CANCEL","Отменено перемещение; восстановлен статус: " + status);
+                    cancelled++;
+                }
+                c.commit(); return cancelled;
+            } catch (SQLException e) { c.rollback(); throw e; }
+            finally { c.setAutoCommit(true); }
+        }
+    }
+
+    private static String previousStatusCode(String fromPlace) {
+        String s = fromPlace == null ? "" : fromPlace.trim().toLowerCase();
+        if (s.contains("списан")) return "WRITTEN_OFF";
+        if (s.contains("кип")) return "KIP";
+        if (s.contains("склад")) return "WAREHOUSE";
+        if (s.contains("позици") || s.contains("установ") || s.contains("installed")) return "INSTALLED";
+        return null;
     }
 
     public static JSONArray getDeviceMovementHistory(long deviceId) throws SQLException {
