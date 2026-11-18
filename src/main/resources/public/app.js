@@ -530,7 +530,7 @@ function renderAllTab() {
  * ========================================================= */
 const workflowTabs = {
     positions: { status: 'На позиции', title: 'На позиции', actions: [{label:'Переместить на склад', status:'WAREHOUSE', event:'Передача на склад'}] },
-    warehouse: { status: 'Склад', title: 'Склад', actions: [{label:'Передать в КИП', status:'KIP', event:'Передача в КИП'}, {label:'Списать', status:'WRITTEN_OFF', event:'Списание'}] },
+    warehouse: { status: 'Склад', title: 'Склад', actions: [{label:'Передать в КИП', status:'KIP', event:'Передача в КИП'}, {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'}, {label:'Списать', status:'WRITTEN_OFF', event:'Списание'}] },
     kip: { status: 'КИП', title: 'КИП', actions: [
         {label:'Вернуть на склад', status:'WAREHOUSE', event:'Возврат из КИП на склад'},
         {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'},
@@ -760,6 +760,12 @@ async function moveSelectedDevices(fromTab, action) {
         return;
     }
     const targetLabel = action.status === 'INSTALLED' ? 'На позиции' : action.status === 'WAREHOUSE' ? 'Склад' : action.status === 'WRITTEN_OFF' ? 'Списан' : 'КИП';
+    let movementNote = '';
+    if (action.status === 'WRITTEN_OFF') {
+        const actNumber = window.prompt('Номер акта списания (например, АКТ-2026-015):', '');
+        if (actNumber === null) return;
+        movementNote = `Акт списания: ${actNumber.trim()}`;
+    }
     beginLoading();
     const batchMovedAt = new Date().toISOString();
     let moved = 0, failed = [], successful = [];
@@ -803,7 +809,7 @@ async function moveSelectedDevices(fromTab, action) {
                     deviceIds: successful.map(item => item.id),
                     eventDate: today(), eventType: action.event,
                     fromPlace: [...new Set(successful.map(item => item.previousStatus))].join(', '),
-                    toPlace: targetLabel, note: ''
+                    toPlace: targetLabel, note: movementNote
                 })
             });
             if (!logResponse.ok) {
@@ -812,18 +818,23 @@ async function moveSelectedDevices(fromTab, action) {
             }
         }
 
-        // Сбрасываем выбор и в Set, и в DOM. Для операции «Склад → КИП»
-        // очищаем весь склад, чтобы оставшиеся строки не сохраняли старые галочки.
-        clearWorkflowTabSelection(fromTab);
-        if (fromTab === 'warehouse' && action.status === 'KIP') {
-            clearWorkflowTabSelection('warehouse');
-        }
-        if (moved && fromTab === 'positions' && action.status === 'WAREHOUSE') {
-            successful.forEach(item => { recentlyMovedToWarehouse.add(Number(item.id)); workflowSelection.warehouse.add(Number(item.id)); });
+        // Снимаем выделение только с успешно обработанных приборов.
+        // При ошибках (например, «Гость может только просматривать данные»)
+        // неуспешные приборы остаются отмеченными для повторной попытки после входа.
+        successful.forEach(item => workflowSelection[fromTab].delete(Number(item.id)));
+        const destinationTab = action.status === 'KIP' ? 'kip' : action.status === 'WAREHOUSE' ? 'warehouse' : action.status === 'INSTALLED' ? 'positions' : null;
+        if (moved && destinationTab) {
+            clearWorkflowTabSelection(destinationTab);
+            successful.forEach(item => workflowSelection[destinationTab].add(Number(item.id)));
+            if (destinationTab === 'warehouse') successful.forEach(item => recentlyMovedToWarehouse.add(Number(item.id)));
             render();
-            window.location.hash = 'warehouse';
-            switchTab('warehouse');
-        } else render();
+            window.location.hash = destinationTab;
+            switchTab(destinationTab);
+        } else {
+            // Сохраняем оставшиеся выбранные (в том числе все, если запросы отклонены).
+            render();
+            updateWorkflowToolbar(fromTab);
+        }
         if (moved) showToast('Перемещение выполнено', `Перемещено приборов: ${moved} одной операцией`, 'success');
         if (failed.length) showToast('Есть ошибки', failed.slice(0, 3).join('; '), 'error');
     } finally {
@@ -2102,3 +2113,4 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeWorkflowTabs();
     initializeAuth();
 });
+

@@ -1160,13 +1160,18 @@ public class Db {
         try (Connection c = DriverManager.getConnection(DB_URL)) {
             c.setAutoCommit(false);
             try (PreparedStatement ps = c.prepareStatement("INSERT INTO device_movements(device_id,event_date,event_type,from_place,to_place,note,created_by,created_at,batch_id) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND is_deleted=0)")) {
-                for (int i = 0; i < deviceIds.length(); i++) {
-                    long id = deviceIds.getLong(i);
-                    ps.setLong(1, id); setDateOrNull(ps, 2, eventDate); ps.setString(3, eventType);
-                    ps.setString(4, fromPlace); ps.setString(5, toPlace); ps.setString(6, note);
-                    ps.setString(7, user); ps.setString(8, LocalDateTime.now().format(DB_DATE_FORMAT));
-                    ps.setString(9, batchId); ps.setLong(10, id);
-                    if (ps.executeUpdate() == 0) throw new SQLException("Прибор не найден: " + id);
+                try (PreparedStatement audit = c.prepareStatement("INSERT INTO audit_log(device_id,changed_at,changed_by,action,details) VALUES(?,datetime('now'),?,?,?)")) {
+                    for (int i = 0; i < deviceIds.length(); i++) {
+                        long id = deviceIds.getLong(i);
+                        ps.setLong(1, id); setDateOrNull(ps, 2, eventDate); ps.setString(3, eventType);
+                        ps.setString(4, fromPlace); ps.setString(5, toPlace); ps.setString(6, note);
+                        ps.setString(7, user); ps.setString(8, LocalDateTime.now().format(DB_DATE_FORMAT));
+                        ps.setString(9, batchId); ps.setLong(10, id);
+                        if (ps.executeUpdate() == 0) throw new SQLException("Прибор не найден: " + id);
+                        audit.setLong(1, id); audit.setString(2, user); audit.setString(3, eventType);
+                        String details = (fromPlace == null || fromPlace.isBlank() ? "" : fromPlace + " → ") + (toPlace == null ? "" : toPlace) + (note == null || note.isBlank() ? "" : " | " + note);
+                        audit.setString(4, details); audit.executeUpdate();
+                    }
                 }
                 c.commit();
             } catch (SQLException e) { c.rollback(); throw e; }

@@ -946,3 +946,22 @@ button[data-busy="1"] .btn-spinner {
 }
 /* Warehouse arrival timestamp column */
 .warehouse-date-column { white-space: nowrap; min-width: 150px; color: var(--text-dim, #9aa7bd); }
+
+
+/* Гостевой режим: workflow остаётся доступным для просмотра и фильтрации,
+   но элементы выбора и любые операции перемещения/списания скрыты. */
+body.read-only .workflow-select-cell,
+body.read-only .workflow-action,
+body.read-only .workflow-clear-selection { display: none !important; }
+body.read-only .workflow-selected-count { display: none !important; }
+body.read-only #movementRemoveSelected,
+body.read-only #movementCancelAll,
+body.read-only #addMovementBtn,
+body.read-only #removePhotoBtn,
+body.read-only #copyDeviceBtn { display: none !important; }
+body.read-only #confirmAddDeviceDocument,
+body.read-only #movementRemoveSelected,
+body.read-only #movementCancelAll,
+body.read-only #addMovementBtn,
+body.read-only #removePhotoBtn,
+body.read-only #copyDeviceBtn { display: none !important; }
