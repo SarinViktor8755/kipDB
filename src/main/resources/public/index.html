@@ -312,7 +312,10 @@
     </section>
 
     <section id="tab-chart" class="tab-panel">
-        <div class="empty" style="padding:48px 20px">Раздел «График» пока пуст. Здесь будет размещён график.</div>
+        <div class="toolbar chart-toolbar"><input id="chartSearch" type="search" placeholder="Поиск по заводскому номеру, типу датчика или позиции…"><span id="chartCount" class="muted">0 приборов</span><button id="chartRefreshBtn" class="btn" type="button">Обновить</button></div>
+        <div id="chartSearchResults" class="chart-search-results" hidden></div>
+        <div class="devices-table-scroll"><table id="tableChart" class="devices"><thead><tr><th>№</th><th>Заводской номер</th><th>Тип датчика</th><th>Оборудование</th><th>Наименование позиции</th><th>Позиция</th><th>Дата добавления</th><th>Порядок</th><th>Действия</th></tr></thead><tbody></tbody></table></div>
+        <div id="emptyChart" class="empty" hidden>График пуст. Найдите прибор и нажмите «Добавить».</div>
     </section>
 
     <section id="tab-help" class="tab-panel help-page">
