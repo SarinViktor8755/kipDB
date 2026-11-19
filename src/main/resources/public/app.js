@@ -1312,6 +1312,7 @@ $('#cancelLoginBtn').addEventListener('click', () => {
     $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#userSelect').value = state.user ? state.user.login : '';
 });
 $('#logoutBtn').addEventListener('click', async () => {
+    $('#userMenu')?.removeAttribute('open');
     await apiFetch('/api/auth/logout', {method:'POST'});
     state.user = null;
     $('#userSelect').value = 'guest';
