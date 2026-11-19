@@ -11,6 +11,7 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         Db.init();
+        WorkflowDb.init();
         PositionDirectory.init();
         ChartDb.init();
         System.out.println("SQLite инициализирован: " + Db.getDatabasePath());
