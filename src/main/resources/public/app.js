@@ -493,6 +493,7 @@ async function loadStats() {
     const r = await apiFetch('/api/stats');
     if (!r.ok) return;
     state.stats = await r.json();
+    updateWorkflowTabBadges();
 }
 
 async function loadAudit(limit = 200) {
@@ -508,14 +509,7 @@ async function loadTrash() {
 }
 
 function updateWorkflowTabBadges() {
-    if (!state.workflowDataLoaded) {
-        document.querySelectorAll('.tab[data-tab="positions"] .tab-count-badge, .tab[data-tab="warehouse"] .tab-count-badge').forEach(b => { b.hidden = true; });
-        return;
-    }
-    const counts = {
-        positions: state.devices.filter(d => locationStatusOf(d) === 'На позиции').length,
-        warehouse: state.devices.filter(d => locationStatusOf(d) === 'Склад').length
-    };
+    const counts = { positions: Number(state.stats.positions || 0), warehouse: Number(state.stats.warehouse || 0) };
     for (const [key, count] of Object.entries(counts)) {
         const badge = document.querySelector('.tab[data-tab="' + key + '"] .tab-count-badge');
         if (!badge) continue;
