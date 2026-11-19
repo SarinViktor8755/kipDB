@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -539,7 +540,7 @@ public class Db {
             try (PreparedStatement ps = c.prepareStatement(select)) {
                 int p=1; for (String value : values) ps.setString(p++, value);
                 ps.setInt(p++, limit); ps.setInt(p, offset);
-                try (ResultSet rs=ps.executeQuery()) { while (rs.next()) rows.put(readDevice(rs).id == 0 ? new JSONObject() : deviceJsonForPage(rs)); }
+                try (ResultSet rs=ps.executeQuery()) { while (rs.next()) rows.put(deviceJsonForPage(rs)); }
             }
         }
         return new JSONObject().put("items", rows).put("total", total)
