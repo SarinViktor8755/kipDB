@@ -1120,6 +1120,9 @@ function switchTab(tabName) {
     if (panel) panel.classList.add('active');
 
     state.currentTab = tabName;
+    const titles = {"all":"Все приборы","positions":"На позиции","warehouse":"Склад","kip":"КИП","documents":"Документы","movements":"Перемещения","audit":"Журнал","trash":"Корзина","position-directory":"Справочник позиций","chart":"График","users":"Пользователи","help":"Инструкция"};
+    const pageTitle = $('#pageTitle');
+    if (pageTitle) pageTitle.textContent = titles[tabName] || 'Приборы КИП';
 
     if (!state.user) return;
     if (workflowTabs[tabName]) renderWorkflowTab(tabName);
@@ -1209,6 +1212,8 @@ function applyRoleUI() {
     if (cur) cur.textContent = state.user ? `${state.user.name} · ${roleTitle(state.user.role)}` : 'Не выполнен вход';
     const logout = $('#logoutBtn');
     if (logout) logout.hidden = !state.user;
+    const userMenu = $('#userMenu');
+    if (userMenu && !state.user) userMenu.removeAttribute('open');
     if (state.user) $('#userSelect').value = state.user.login;
 }
 
@@ -1282,6 +1287,7 @@ async function loginSelectedUser(password = '') {
 }
 
 $('#userSelect').addEventListener('change', async () => {
+    $('#userMenu')?.removeAttribute('open');
     const login = $('#userSelect').value;
     if (!login) return;
     if (login.toLowerCase() === 'guest') {
@@ -2109,8 +2115,19 @@ document.addEventListener('keydown', (event) => {
 /* =========================================================
  *  СТАРТ
  * ========================================================= */
+function updateLiveClock() {
+    const clock = $('#liveClock');
+    if (!clock) return;
+    const now = new Date();
+    clock.textContent = new Intl.DateTimeFormat('ru-RU', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).format(now);
+}
 document.addEventListener('DOMContentLoaded', () => {
     initializeWorkflowTabs();
+    updateLiveClock();
+    window.setInterval(updateLiveClock, 1000);
     initializeAuth();
 });
 
