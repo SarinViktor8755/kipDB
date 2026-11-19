@@ -1039,3 +1039,5 @@ body.read-only #copyDeviceBtn { display: none !important; }
 
 /* Круглые счётчики приборов на вкладках */
 .tabs .tab-count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;margin-left:5px;border-radius:50%;background:#dc2626;color:#fff;font-size:11px;line-height:19px;font-weight:700;font-variant-numeric:tabular-nums}.tabs .tab-count-badge[hidden]{display:none!important}
+
+.device-page-sentinel{padding:14px;text-align:center;color:var(--text-dim);font-size:13px;min-height:20px}
