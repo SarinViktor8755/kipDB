@@ -1140,7 +1140,7 @@ function switchTab(tabName) {
     state.currentTab = tabName;
     const titles = {"all":"Все приборы","positions":"На позиции","warehouse":"Склад","kip":"КИП","movements":"Перемещения","audit":"Журнал","trash":"Корзина","position-directory":"Справочник позиций","chart":"График","users":"Пользователи","help":"Инструкция"};
     const pageTitle = $('#pageTitle');
-    if (pageTitle) pageTitle.textContent = titles[tabName] || 'Приборы КИП';
+    if (pageTitle) pageTitle.textContent = 'Приборы КИП : ' + (titles[tabName] || 'Все приборы');
 
     if (!state.user) return;
     if (workflowTabs[tabName]) renderWorkflowTab(tabName);
