@@ -425,9 +425,24 @@ async function loadTrash() {
     return r.json();
 }
 
+function updateWorkflowTabBadges() {
+    const counts = {
+        positions: state.devices.filter(d => locationStatusOf(d) === 'На позиции').length,
+        warehouse: state.devices.filter(d => locationStatusOf(d) === 'Склад').length
+    };
+    for (const [key, count] of Object.entries(counts)) {
+        const badge = document.querySelector('.tab[data-tab="' + key + '"] .tab-count-badge');
+        if (!badge) continue;
+        badge.textContent = String(count);
+        badge.hidden = count === 0;
+        badge.setAttribute('aria-label', count + ' приборов');
+    }
+}
+
 function render() {
     renderAllTab();
     Object.keys(workflowTabs).forEach(renderWorkflowTab);
+    updateWorkflowTabBadges();
 }
 
 function formatTableDate(value) {
@@ -509,196 +524,15 @@ function renderAllTab() {
         return `<tr data-id="${d.id}">
         <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td>
-        <td>${escapeHtml(ref ? (ref.equipment || '—') : (d.groupName || '—'))}</td>
-        <td>${escapeHtml(ref ? (ref.description || '—') : (d.positionName || '—'))}</td>
+        <td>${escapeHtml(equipment || '—')}</td>
+        <td>${escapeHtml(positionName || '—')}</td>
         <td>${escapeHtml(d.location || '—')}</td>
+        ${key === 'warehouse' ? `<td class="warehouse-date-column">${escapeHtml(formatWorkflowTimestamp(d.workflowMovedAt))}</td>` : ''}
         <td>${escapeHtml(formatScale(d))}</td>
         <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
         <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td>
-        <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
-    </tr>`;
-    }).join('');
-
-    const emptyEl = $('#emptyAll');
-    if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
-}
-
-
-/* =========================================================
- *  Рабочие списки: «На позиции», «Склад», «КИП»
- *  Используют ту же структуру таблицы и те же поля, что «Все приборы».
- * ========================================================= */
-const workflowTabs = {
-    positions: { status: 'На позиции', title: 'На позиции', actions: [{label:'Переместить на склад', status:'WAREHOUSE', event:'Передача на склад'}] },
-    warehouse: { status: 'Склад', title: 'Склад', actions: [{label:'Передать в КИП', status:'KIP', event:'Передача в КИП'}, {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'}, {label:'Списать', status:'WRITTEN_OFF', event:'Списание'}] },
-    kip: { status: 'КИП', title: 'КИП', actions: [
-        {label:'Вернуть на склад', status:'WAREHOUSE', event:'Возврат из КИП на склад'},
-        {label:'Установить на позицию', status:'INSTALLED', event:'Установка на позицию'},
-        {label:'Списать', status:'WRITTEN_OFF', event:'Списание'}
-    ] }
-};
-const workflowSelection = { positions: new Set(), warehouse: new Set(), kip: new Set() };
-const workflowFilters = { positions: {}, warehouse: {}, kip: {} };
-
-function initializeWorkflowTabs() {
-    const source = document.getElementById('tableAll');
-    if (!source) return;
-    Object.entries(workflowTabs).forEach(([key, config]) => {
-        const host = document.querySelector(`[data-workflow-tab="${key}"]`);
-        if (!host) return;
-        const toolbar = document.createElement('div');
-        toolbar.className = 'toolbar workflow-toolbar';
-        toolbar.innerHTML = `<input type="search" class="workflow-search" placeholder="Поиск по названию, зав. номеру или позиции…" aria-label="Поиск">
-            <span class="workflow-selected-count">Выбрано: 0</span>
-            ${config.actions.map((act, i) => `<button type="button" class="btn-primary workflow-action${act.status === 'WRITTEN_OFF' ? ' workflow-action-writeoff' : ''}" data-action-index="${i}" disabled>${act.label}</button>`).join('')}
-            <button type="button" class="btn workflow-clear-selection">Снять выделение</button>`;
-        const wrap = document.createElement('div');
-        wrap.className = 'devices-table-scroll';
-        const table = source.cloneNode(true);
-        table.id = `tableWorkflow_${key}`;
-        table.querySelectorAll('tbody').forEach(tb => tb.innerHTML = '');
-        table.querySelectorAll('datalist').forEach(el => el.remove());
-        table.querySelectorAll('input.col-filter').forEach(inp => {
-            inp.value = '';
-            inp.dataset.workflowTab = key;
-        });
-        table.querySelectorAll('select.col-sort').forEach(sel => {
-            sel.value = '';
-            sel.dataset.workflowTab = key;
-        });
-        table.querySelectorAll('thead tr').forEach((tr, index) => {
-            // Вкладки «На позиции», «Склад», «КИП»: статус не дублируем в таблице.
-            if (tr.children.length) tr.removeChild(tr.lastElementChild);
-            const th = document.createElement('th');
-            th.className = 'workflow-select-cell';
-            th.innerHTML = index === 0
-                ? `<input type="checkbox" class="workflow-select-all" aria-label="Выбрать все видимые приборы">`
-                : '';
-            tr.prepend(th);
-            if (key === 'warehouse' && index === 0) {
-                const dateTh = document.createElement('th');
-                dateTh.className = 'warehouse-date-column';
-                dateTh.textContent = 'Дата поступления на склад';
-                // Дата располагается после колонки «Тип датчика».
-                const sensorHeader = [...tr.children].find(el => el.textContent.trim() === 'Тип датчика');
-                if (sensorHeader) sensorHeader.after(dateTh);
-                else tr.appendChild(dateTh);
-            }
-        });
-        wrap.appendChild(table);
-        const empty = document.createElement('div');
-        empty.className = 'empty workflow-empty';
-        empty.textContent = 'Нет приборов';
-        host.replaceChildren(toolbar, wrap, empty);
-
-        toolbar.querySelector('.workflow-search').addEventListener('input', debounce(() => renderWorkflowTab(key), 180));
-        toolbar.querySelector('.workflow-clear-selection').addEventListener('click', () => {
-            clearWorkflowTabSelection(key);
-            renderWorkflowTab(key);
-        });
-        toolbar.querySelectorAll('.workflow-action').forEach(btn => btn.addEventListener('click', () => {
-            const action = config.actions[Number(btn.dataset.actionIndex)];
-            moveSelectedDevices(key, action).catch(err => showToast('Ошибка перемещения', err.message, 'error'));
-        }));
-        table.addEventListener('change', event => {
-            const checkbox = event.target.closest('.workflow-device-check');
-            if (checkbox) {
-                const id = Number(checkbox.dataset.id);
-                if (checkbox.checked) workflowSelection[key].add(id);
-                else workflowSelection[key].delete(id);
-                updateWorkflowToolbar(key);
-                const selectAll = table.querySelector('.workflow-select-all');
-                const visible = [...table.querySelectorAll('.workflow-device-check')];
-                if (selectAll) selectAll.checked = visible.length > 0 && visible.every(x => x.checked);
-                return;
-            }
-            if (event.target.matches('.workflow-select-all')) {
-                table.querySelectorAll('.workflow-device-check').forEach(cb => {
-                    cb.checked = event.target.checked;
-                    const id = Number(cb.dataset.id);
-                    if (event.target.checked) workflowSelection[key].add(id);
-                    else workflowSelection[key].delete(id);
-                });
-                updateWorkflowToolbar(key);
-            }
-        });
-        table.querySelectorAll('.col-filter').forEach(inp => inp.addEventListener('input', debounce(() => {
-            const col = inp.dataset.col, value = (inp.value || '').toLowerCase().trim();
-            if (value) workflowFilters[key][col] = value;
-            else delete workflowFilters[key][col];
-            renderWorkflowTab(key);
-        }, 180)));
-        table.querySelectorAll('.col-sort').forEach(sel => sel.addEventListener('change', () => {
-            const col = sel.dataset.col, value = sel.value;
-            if (value) workflowFilters[key]['__sort_' + col] = value;
-            else delete workflowFilters[key]['__sort_' + col];
-            renderWorkflowTab(key);
-        }));
-        // Карточка прибора открывается только по нажатию на заводской номер,
-        // а не по любой ячейке строки (как во вкладке «Перемещения»).
-        table.addEventListener('click', event => {
-            const serialLink = event.target.closest('[data-open-workflow-device]');
-            if (!serialLink) return;
-            const deviceId = Number(serialLink.dataset.openWorkflowDevice);
-            const device = state.devices.find(d => Number(d.id) === deviceId);
-            if (device) openViewModal(device);
-        });
-    });
-}
-
-function renderWorkflowTab(key) {
-    const config = workflowTabs[key];
-    const host = document.querySelector(`[data-workflow-tab="${key}"]`);
-    if (!config || !host) return;
-    const table = host.querySelector('table');
-    if (!table) return;
-    const query = (host.querySelector('.workflow-search')?.value || '').toLowerCase().trim();
-    const filters = workflowFilters[key];
-    // Последняя складская партия определяется по сохранённому сервером workflowMovedAt.
-    let rows = state.devices.filter(device => {
-        if (locationStatusOf(device) !== config.status) return false;
-        if (query && ![device.name,device.location,device.serialNumber,device.sensorType,device.unit,device.category,device.groupName,device.positionName,device.redLine].join(' ').toLowerCase().includes(query)) return false;
-        for (const [col, needle] of Object.entries(filters)) {
-            if (col.startsWith('__sort_')) continue;
-            if (!String(cellValueForColumn(device, col) || '').toLowerCase().includes(needle)) return false;
-        }
-        return true;
-    });
-    const sortEntries = Object.entries(filters).filter(([col]) => col.startsWith('__sort_'));
-    if (sortEntries.length) {
-        const [keySort, dir] = sortEntries[sortEntries.length - 1], col = keySort.slice(7);
-        rows.sort((a,b) => {
-            const av = String(a[col] || ''), bv = String(b[col] || '');
-            if (!av) return bv ? 1 : 0;
-            if (!bv) return -1;
-            return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-        });
-    } else if (key === 'warehouse' || key === 'kip') {
-        // В разделах «Склад» и «КИП» сверху показываем приборы,
-        // которые последними были перемещены в соответствующий раздел.
-        rows.sort((a, b) => {
-            const at = Date.parse(a.workflowMovedAt || a.createdAt || '') || 0;
-            const bt = Date.parse(b.workflowMovedAt || b.createdAt || '') || 0;
-            return bt - at;
-        });
-    } else {
-        rows.sort((a,b) => String(a.nextVerification || '9999').localeCompare(String(b.nextVerification || '9999')));
-    }
-    table.querySelector('tbody').innerHTML = rows.map(d => {
-        const ref = referencePositionForDevice(d);
-        const equipment = ref ? ref.equipment : d.groupName;
-        const positionName = ref ? ref.description : (d.positionName || d.name);
-        return `<tr data-id="${d.id}">
-        <td class="workflow-select-cell"><input type="checkbox" class="workflow-device-check" data-id="${d.id}" aria-label="Выбрать прибор" ${workflowSelection[key].has(Number(d.id)) ? 'checked' : ''}></td>
-        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
-        <td>${escapeHtml(d.sensorType || '—')}</td>${key === 'warehouse' ? `<td class="warehouse-date-column">${escapeHtml(formatWorkflowTimestamp(d.workflowMovedAt))}</td>` : ''}<td>${escapeHtml(formatScale(d))}</td>
-        <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
-        <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
-        <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
-        <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(equipment || '—')}</td>
-        <td>${escapeHtml(positionName || '—')}</td>
     </tr>`;
     }).join('');
     const empty = host.querySelector('.workflow-empty');
@@ -1570,7 +1404,7 @@ $('#tableDocumentDevices').addEventListener('click', async e => {
 let chartRows = []; let chartSearchTimer = null;
 async function loadChart(){const r=await apiFetch('/api/chart');if(!r.ok)throw new Error('HTTP '+r.status);chartRows=await r.json();renderChart();}
 function renderChart(){const body=$('#tableChart tbody');if(!body)return;body.innerHTML=chartRows.map((d,i)=>`<tr><td>${i+1}</td><td><button class="btn-link" data-chart-open="${d.id}">${escapeHtml(d.serialNumber||'—')}</button></td><td>${escapeHtml(d.sensorType||'—')}</td><td>${escapeHtml(d.groupName||'—')}</td><td>${escapeHtml(d.positionName||'—')}</td><td>${escapeHtml(d.location||'—')}</td><td>${escapeHtml(d.addedAt||'—')}</td><td class="chart-order"><button class="btn" data-chart-up="${d.id}" ${i===0?'disabled':''}>↑</button> <button class="btn" data-chart-down="${d.id}" ${i===chartRows.length-1?'disabled':''}>↓</button></td><td><button class="btn-danger" data-chart-remove="${d.id}">Убрать</button></td></tr>`).join('');$('#chartCount').textContent=chartRows.length+' приборов';$('#emptyChart').hidden=chartRows.length>0;}
-async function searchChartDevices(){const q=$('#chartSearch').value.trim(),box=$('#chartSearchResults');if(!q){box.hidden=true;box.innerHTML='';return;}const r=await apiFetch('/api/chart/search?q='+encodeURIComponent(q));if(!r.ok)throw new Error('Ошибка поиска');const rows=await r.json();box.innerHTML=rows.map(d=>`<div class="chart-search-row"><div><strong>${escapeHtml(d.serialNumber||'Без номера')}</strong><span>${escapeHtml(d.sensorType||'—')} · ${escapeHtml(d.positionName||d.location||'Без позиции')}</span></div><button class="${d.inChart?'btn':'btn-primary'}" data-chart-add="${d.id}" ${d.inChart?'disabled':''}>${d.inChart?'Уже в графике':'Добавить'}</button></div>`).join('')||'<div class="empty">Приборы не найдены</div>';box.hidden=false;}
+async function searchChartDevices(){const q=$('#chartSearch').value.trim(),box=$('#chartSearchResults');if(!q){box.hidden=true;box.innerHTML='';return;}const r=await apiFetch('/api/chart/search?q='+encodeURIComponent(q));if(!r.ok)throw new Error('HTTP '+r.status);const rows=await r.json();box.innerHTML=rows.map(d=>`<div class="chart-search-row"><div><strong>${escapeHtml(d.serialNumber||'Без номера')}</strong><span>${escapeHtml(d.sensorType||'—')} · ${escapeHtml(d.positionName||d.location||'Без позиции')}</span></div><button class="${d.inChart?'btn':'btn-primary'}" data-chart-add="${d.id}" ${d.inChart?'disabled':''}>${d.inChart?'Уже в графике':'Добавить'}</button></div>`).join('')||'<div class="empty">Приборы не найдены</div>';box.hidden=false;}
 $('#chartSearch')?.addEventListener('input',()=>{clearTimeout(chartSearchTimer);chartSearchTimer=setTimeout(()=>searchChartDevices().catch(e=>showToast('Ошибка поиска',e.message,'error')),220);});
 $('#chartRefreshBtn')?.addEventListener('click',()=>loadChart().catch(e=>showToast('Ошибка графика',e.message,'error')));
 $('#chartSearchResults')?.addEventListener('click',async e=>{const b=e.target.closest('[data-chart-add]');if(!b)return;b.disabled=true;try{const r=await apiFetch('/api/chart/'+b.dataset.chartAdd,{method:'POST'});if(!r.ok)throw new Error('Не удалось добавить прибор');await loadChart();await searchChartDevices();}catch(err){b.disabled=false;showToast('Ошибка добавления',err.message,'error');}});
