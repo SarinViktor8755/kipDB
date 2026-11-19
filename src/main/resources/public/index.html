@@ -74,8 +74,10 @@
                 <thead>
                 <tr class="head-titles">
                     <th>Заводской номер</th>
-                    <th>Позиция</th>
                     <th>Тип датчика</th>
+                    <th>Оборудование</th>
+                    <th>Наименование позиции</th>
+                    <th>Позиция</th>
                     <th>Шкала</th>
                     <th>П/К</th>
                     <th>Дата поверки</th>
@@ -84,38 +86,23 @@
                     <th>Класс точности</th>
                     <th>Красная черта</th>
                     <th>Отложенная поверка</th>
-                    <th>Оборудование</th>
-                    <th>Наименование позиции</th>
                     <th>Статус</th>
                 </tr>
                 <tr class="head-filters">
-                    <th><input class="col-filter" data-col="serialNumber"         list="col-dl-serialNumber"         type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="location"             list="col-dl-location"             type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="sensorType"           list="col-dl-sensorType"           type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="scale"                list="col-dl-scale"                type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="category"             list="col-dl-category"             type="search" placeholder="Фильтр…"></th>
-                    <th>
-                        <select class="col-sort" data-col="lastVerification">
-                            <option value="">— все —</option>
-                            <option value="desc">Сначала новые</option>
-                            <option value="asc">Сначала старые</option>
-                        </select>
-                    </th>
-                    <th><input class="col-filter" data-col="mpi"                  list="col-dl-mpi"                  type="search" placeholder="Фильтр…"></th>
-                    <th>
-                        <!-- По умолчанию: ближайшие даты следующей поверки сверху -->
-                        <select class="col-sort" data-col="nextVerification">
-                            <option value="">— все —</option>
-                            <option value="asc" selected>Сначала ближайшие</option>
-                            <option value="desc">Сначала дальние</option>
-                        </select>
-                    </th>
-                    <th><input class="col-filter" data-col="accuracyClass"        list="col-dl-accuracyClass"        type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="redLine"              list="col-dl-redLine"              type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="deferredVerification" list="col-dl-deferredVerification" type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="groupName"            list="col-dl-groupName"            type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="positionName"         list="col-dl-positionName"         type="search" placeholder="Фильтр…"></th>
-                    <th><input class="col-filter" data-col="locationStatus"       list="col-dl-locationStatus"       type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="serialNumber" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="sensorType" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="groupName" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="positionName" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="location" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="scale" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="category" type="search" placeholder="Фильтр…"></th>
+                    <th><select class="col-sort" data-col="lastVerification"><option value="">— все —</option><option value="desc">Сначала новые</option><option value="asc">Сначала старые</option></select></th>
+                    <th><input class="col-filter" data-col="mpi" type="search" placeholder="Фильтр…"></th>
+                    <th><select class="col-sort" data-col="nextVerification"><option value="">— все —</option><option value="asc" selected>Сначала ближайшие</option><option value="desc">Сначала дальние</option></select></th>
+                    <th><input class="col-filter" data-col="accuracyClass" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="redLine" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="deferredVerification" type="search" placeholder="Фильтр…"></th>
+                    <th><input class="col-filter" data-col="locationStatus" type="search" placeholder="Фильтр…"></th>
                 </tr>
                 </thead>
                 <tbody></tbody>
