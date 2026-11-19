@@ -288,6 +288,11 @@ public class ApiHandler implements HttpHandler {
                 return;
             }
 
+            if (path.equals("/api/devices/page") && "GET".equals(method)) {
+                listDevicesPage(ex);
+                return;
+            }
+
             if (path.equals("/api/devices")) {
                 if ("GET".equals(method)) listDevices(ex);
                 else if ("POST".equals(method)) createDevice(ex);
@@ -461,6 +466,33 @@ public class ApiHandler implements HttpHandler {
         String name = rel.substring("photos/".length());
         if (name.isEmpty() || name.contains("/") || name.contains("\\") || name.contains("..")) return;
         try { Files.deleteIfExists(PHOTOS_DIR.resolve(name)); } catch (IOException ignored) { }
+    }
+
+    private void listDevicesPage(HttpExchange ex) throws IOException, SQLException {
+        Map<String,String> params = new java.util.HashMap<>();
+        String raw = ex.getRequestURI().getRawQuery();
+        if (raw != null) for (String part : raw.split("&")) {
+            int eq = part.indexOf('=');
+            String key = URLDecoder.decode(eq < 0 ? part : part.substring(0,eq), StandardCharsets.UTF_8);
+            String value = URLDecoder.decode(eq < 0 ? "" : part.substring(eq+1), StandardCharsets.UTF_8);
+            params.put(key, value);
+        }
+        int limit = parseBoundedInt(params.get("limit"), 150, 1, 500);
+        int offset = parseBoundedInt(params.get("offset"), 0, 0, Integer.MAX_VALUE);
+        JSONObject filters;
+        try { filters = new JSONObject(params.getOrDefault("filters", "{}")); }
+        catch (Exception ignored) { filters = new JSONObject(); }
+        JSONObject result = Db.getDevicesPage(limit, offset, params.get("q"), params.get("status"),
+                filters, params.get("sort"), params.get("direction"));
+        String etag = "\"devices-page-" + Db.getDevicesRevision() + "-" + Integer.toHexString(params.toString().hashCode()) + "\"";
+        ex.getResponseHeaders().set("ETag", etag);
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        sendJsonGzip(ex, 200, result);
+    }
+
+    private static int parseBoundedInt(String value, int fallback, int min, int max) {
+        try { return Math.max(min, Math.min(max, Integer.parseInt(value))); }
+        catch (Exception ignored) { return fallback; }
     }
 
     private void listDevices(HttpExchange ex) throws IOException, SQLException {
