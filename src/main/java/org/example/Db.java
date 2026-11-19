@@ -485,6 +485,84 @@ public class Db {
         }
     }
 
+    /** Серверная выборка страницы приборов. Фильтры и сортировка применяются до LIMIT/OFFSET. */
+    public static JSONObject getDevicesPage(int limit, int offset, String query, String status,
+                                             JSONObject filters, String sort, String direction) throws SQLException {
+        limit = Math.max(1, Math.min(limit, 500));
+        offset = Math.max(0, offset);
+        StringBuilder where = new StringBuilder(" WHERE is_deleted = 0 ");
+        List<String> values = new ArrayList<>();
+        if (query != null && !query.isBlank()) {
+            where.append(" AND (lower(coalesce(serial_number,'')) LIKE ? OR lower(coalesce(name,'')) LIKE ? OR lower(coalesce(location,'')) LIKE ?")
+                 .append(" OR lower(json_extract(details_json,'$.sensorType')) LIKE ? OR lower(json_extract(details_json,'$.groupName')) LIKE ? OR lower(json_extract(details_json,'$.positionName')) LIKE ?) ");
+            String like = "%" + query.trim().toLowerCase() + "%";
+            for (int i=0;i<6;i++) values.add(like);
+        }
+        if ("overdue".equals(status)) where.append(" AND next_verification IS NOT NULL AND next_verification < date('now','localtime') ");
+        else if ("soon".equals(status)) where.append(" AND next_verification >= date('now','localtime') AND next_verification <= date('now','localtime','+30 day') ");
+        else if ("ok".equals(status)) where.append(" AND (next_verification IS NULL OR next_verification > date('now','localtime','+30 day')) ");
+
+        Map<String,String> columns = new java.util.HashMap<>();
+        columns.put("serialNumber","serial_number");
+        columns.put("location","location");
+        columns.put("sensorType","json_extract(details_json,'$.sensorType')");
+        columns.put("groupName","json_extract(details_json,'$.groupName')");
+        columns.put("positionName","json_extract(details_json,'$.positionName')");
+        columns.put("category","json_extract(details_json,'$.category')");
+        columns.put("mpi","json_extract(details_json,'$.mpi')");
+        columns.put("accuracyClass","json_extract(details_json,'$.accuracyClass')");
+        columns.put("redLine","json_extract(details_json,'$.redLine')");
+        columns.put("deferredVerification","json_extract(details_json,'$.deferredVerification')");
+        columns.put("lastVerification","last_verification");
+        columns.put("nextVerification","next_verification");
+        for (String key : filters.keySet()) {
+            String expr = columns.get(key);
+            String value = filters.optString(key, "").trim().toLowerCase();
+            if (expr != null && !value.isEmpty()) {
+                where.append(" AND lower(coalesce(").append(expr).append(",'')) LIKE ? ");
+                values.add("%" + value + "%");
+            }
+        }
+        String orderExpr = columns.get(sort);
+        if (orderExpr == null) orderExpr = "next_verification";
+        String dir = "desc".equalsIgnoreCase(direction) ? "DESC" : "ASC";
+        String order = " ORDER BY (" + orderExpr + " IS NULL) ASC, " + orderExpr + " " + dir + ", id ASC ";
+        String select = "SELECT id, serial_number, name, location, last_verification, next_verification, photo_path, photo_thumb_path, version, created_at, details_json FROM devices "
+                + where + order + " LIMIT ? OFFSET ?";
+        JSONArray rows = new JSONArray();
+        long total = 0;
+        try (Connection c = DriverManager.getConnection(DB_URL)) {
+            try (PreparedStatement count = c.prepareStatement("SELECT COUNT(*) FROM devices " + where)) {
+                int p=1; for (String value : values) count.setString(p++, value);
+                try (ResultSet rs=count.executeQuery()) { if (rs.next()) total=rs.getLong(1); }
+            }
+            try (PreparedStatement ps = c.prepareStatement(select)) {
+                int p=1; for (String value : values) ps.setString(p++, value);
+                ps.setInt(p++, limit); ps.setInt(p, offset);
+                try (ResultSet rs=ps.executeQuery()) { while (rs.next()) rows.put(readDevice(rs).id == 0 ? new JSONObject() : deviceJsonForPage(rs)); }
+            }
+        }
+        return new JSONObject().put("items", rows).put("total", total)
+                .put("offset", offset).put("limit", limit).put("hasMore", offset + rows.length() < total);
+    }
+
+    private static JSONObject deviceJsonForPage(ResultSet rs) throws SQLException {
+        JSONObject o;
+        try { o = new JSONObject(rs.getString("details_json") == null ? "{}" : rs.getString("details_json")); }
+        catch (Exception ex) { o = new JSONObject(); }
+        o.put("id", rs.getLong("id"))
+         .put("serialNumber", rs.getString("serial_number") == null ? "" : rs.getString("serial_number"))
+         .put("name", rs.getString("name") == null ? "" : rs.getString("name"))
+         .put("location", rs.getString("location") == null ? "" : rs.getString("location"))
+         .put("lastVerification", rs.getString("last_verification") == null ? "" : rs.getString("last_verification"))
+         .put("nextVerification", rs.getString("next_verification") == null ? "" : rs.getString("next_verification"))
+         .put("photoPath", rs.getString("photo_path") == null ? JSONObject.NULL : rs.getString("photo_path"))
+         .put("photoThumbPath", rs.getString("photo_thumb_path") == null ? JSONObject.NULL : rs.getString("photo_thumb_path"))
+         .put("version", rs.getInt("version"))
+         .put("createdAt", rs.getString("created_at") == null ? "" : rs.getString("created_at"));
+        return o;
+    }
+
     public static List<Device> getAllDevices() throws SQLException {
         List<Device> result = new ArrayList<>();
         try (Connection c = DriverManager.getConnection(DB_URL);
