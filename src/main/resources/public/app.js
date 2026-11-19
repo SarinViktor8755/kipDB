@@ -414,6 +414,13 @@ async function loadMoreDevicePages() {
         state.pageOffset += items.length;
         state.pageHasMore = !!data.hasMore;
         renderAllTab();
+        // Перепривязываем sentinel после изменения высоты таблицы, чтобы
+        // повторно проверить пересечение, если он всё ещё около viewport.
+        const sentinel = document.getElementById('devicePageSentinel');
+        if (sentinel && devicePageObserver) {
+            devicePageObserver.unobserve(sentinel);
+            devicePageObserver.observe(sentinel);
+        }
     } catch (e) {
         showToast('Ошибка загрузки следующей страницы', e.message, 'error');
     } finally {
@@ -426,9 +433,12 @@ function installDevicePageObserver() {
     const sentinel = document.getElementById('devicePageSentinel');
     if (!sentinel || !('IntersectionObserver' in window)) return;
     if (devicePageObserver) devicePageObserver.disconnect();
+
+    // Таблица прокручивается страницей: .devices-table-scroll имеет overflow-y: visible,
+    // поэтому он НЕ может быть root для IntersectionObserver. null = viewport документа.
     devicePageObserver = new IntersectionObserver(entries => {
-        if (entries.some(x => x.isIntersecting)) loadMoreDevicePages();
-    }, { root: document.getElementById('devicesTableWrap'), rootMargin: '500px' });
+        if (entries.some(entry => entry.isIntersecting)) loadMoreDevicePages();
+    }, { root: null, rootMargin: '700px 0px', threshold: 0 });
     devicePageObserver.observe(sentinel);
 }
 
