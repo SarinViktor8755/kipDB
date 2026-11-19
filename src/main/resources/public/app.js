@@ -357,6 +357,7 @@ async function loadAll() {
     const tbody = document.querySelector('#tableAll tbody');
     // Старый кеш содержал всю базу; больше не восстанавливаем его в браузер.
     try { localStorage.removeItem(DEVICE_CACHE_KEY); } catch (_) {}
+    state.workflowDataLoaded = false;
     state.allPageRows = [];
     state.pageOffset = 0;
     state.pageHasMore = true;
@@ -368,6 +369,7 @@ async function loadAll() {
         renderAllTab();
         updateDatalists();
         installDevicePageObserver();
+        if (workflowTabs[state.currentTab]) await loadFullDevicesForWorkflow();
     } finally {
         setTableBusy(wrap, false);
         finishLoading();
@@ -504,6 +506,10 @@ async function loadTrash() {
 }
 
 function updateWorkflowTabBadges() {
+    if (!state.workflowDataLoaded) {
+        document.querySelectorAll('.tab[data-tab="positions"] .tab-count-badge, .tab[data-tab="warehouse"] .tab-count-badge').forEach(b => { b.hidden = true; });
+        return;
+    }
     const counts = {
         positions: state.devices.filter(d => locationStatusOf(d) === 'На позиции').length,
         warehouse: state.devices.filter(d => locationStatusOf(d) === 'Склад').length
