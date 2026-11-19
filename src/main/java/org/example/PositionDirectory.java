@@ -85,19 +85,28 @@ public final class PositionDirectory {
                     if (p.executeUpdate() == 0) { c.rollback(); return null; }
                 }
                 // Сохраняем связь по ID справочника и синхронизируем все карточки, которые на него ссылаются.
+                JSONArray linkedDevices = new JSONArray();
                 try (PreparedStatement q = c.prepareStatement("SELECT d.id,d.details_json,d.location,w.status FROM devices d LEFT JOIN device_workflow w ON w.device_id=d.id WHERE json_extract(d.details_json,'$.referencePositionId')=? AND COALESCE(d.is_deleted,0)=0")) {
                     q.setLong(1, id);
                     try (ResultSet rs = q.executeQuery()) {
-                        while (rs.next()) {
-                            JSONObject details;
-                            try { details = new JSONObject(rs.getString("details_json")); } catch (Exception ignored) { details = new JSONObject(); }
-                            details.put("groupName", equipment).put("positionName", description);
-                            String location = rs.getString("location");
-                            if ("INSTALLED".equals(rs.getString("status"))) location = position;
-                            try (PreparedStatement u = c.prepareStatement("UPDATE devices SET name=?,location=?,details_json=?,version=version+1 WHERE id=?")) {
-                                u.setString(1, description.isBlank() ? "Без позиции" : description); u.setString(2, location); u.setString(3, details.toString()); u.setLong(4, rs.getLong("id")); u.executeUpdate();
-                            }
-                        }
+                        while (rs.next()) linkedDevices.put(new JSONObject()
+                                .put("id", rs.getLong("id"))
+                                .put("details", rs.getString("details_json") == null ? "{}" : rs.getString("details_json"))
+                                .put("location", rs.getString("location") == null ? "" : rs.getString("location"))
+                                .put("status", rs.getString("status") == null ? "" : rs.getString("status")));
+                    }
+                }
+                for (int i = 0; i < linkedDevices.length(); i++) {
+                    JSONObject linked = linkedDevices.getJSONObject(i), details;
+                    try { details = new JSONObject(linked.optString("details", "{}")); } catch (Exception ignored) { details = new JSONObject(); }
+                    details.put("groupName", equipment).put("positionName", description);
+                    String location = "INSTALLED".equals(linked.optString("status")) ? position : linked.optString("location", "");
+                    try (PreparedStatement u = c.prepareStatement("UPDATE devices SET name=?,location=?,details_json=?,version=version+1 WHERE id=?")) {
+                        u.setString(1, description.isBlank() ? "Без позиции" : description);
+                        u.setString(2, location);
+                        u.setString(3, details.toString());
+                        u.setLong(4, linked.getLong("id"));
+                        u.executeUpdate();
                     }
                 }
                 c.commit();
