@@ -28,8 +28,21 @@ public final class PositionDirectory {
                     "WHERE upper(replace(replace(replace(trim(equipment),' ',''), char(160),''), char(9),''))='ОВП'");
         }
         seedFromBook1IfEmpty();
+        linkExistingDevices();
     }
 
+    /** Однократно связывает старые карточки с ID справочника по коду позиции или паре оборудование/наименование. */
+    private static void linkExistingDevices() throws SQLException {
+        String sql = "UPDATE devices SET details_json=json_set(COALESCE(details_json,'{}'),'$.referencePositionId',(" +
+                "SELECT b.id FROM book_positions b WHERE b.position=devices.location COLLATE NOCASE " +
+                "OR (b.description=json_extract(devices.details_json,'$.positionName') COLLATE NOCASE " +
+                "AND b.equipment=json_extract(devices.details_json,'$.groupName') COLLATE NOCASE) LIMIT 1)) " +
+                "WHERE COALESCE(is_deleted,0)=0 AND json_extract(COALESCE(details_json,'{}'),'$.referencePositionId') IS NULL " +
+                "AND EXISTS(SELECT 1 FROM book_positions b WHERE b.position=devices.location COLLATE NOCASE " +
+                "OR (b.description=json_extract(devices.details_json,'$.positionName') COLLATE NOCASE " +
+                "AND b.equipment=json_extract(devices.details_json,'$.groupName') COLLATE NOCASE))";
+        try (Connection c=Db.openConnection(); Statement st=c.createStatement()) { st.executeUpdate(sql); }
+    }
     private static void seedFromBook1IfEmpty() throws Exception {
         try (Connection c = Db.openConnection()) {
             try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM book_positions")) {
