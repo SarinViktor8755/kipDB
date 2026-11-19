@@ -129,6 +129,16 @@ public class ApiHandler implements HttpHandler {
                 sendJson(ex, 403, new JSONObject().put("error", "Гость может только просматривать данные")); return;
             }
 
+            // Отдельный список приборов для вкладки «График».
+            if (path.equals("/api/chart")) { if (!"GET".equals(method)) { methodNotAllowed(ex); return; } sendJson(ex,200,ChartDb.list()); return; }
+            if (path.equals("/api/chart/search")) {
+                if (!"GET".equals(method)) { methodNotAllowed(ex); return; }
+                String q="", query=ex.getRequestURI().getRawQuery();
+                if(query!=null) for(String part:query.split("&")){int eq=part.indexOf('=');if(eq>=0&&"q".equals(part.substring(0,eq)))q=URLDecoder.decode(part.substring(eq+1),StandardCharsets.UTF_8);}
+                sendJson(ex,200,ChartDb.search(q)); return;
+            }
+            if (path.equals("/api/chart/order")) { if (!"PUT".equals(method)) { methodNotAllowed(ex); return; } JSONArray ids=readJson(ex).optJSONArray("ids"); if(ids==null){sendJson(ex,400,new JSONObject().put("error","Не передан порядок приборов"));return;} ChartDb.reorder(ids);sendJson(ex,200,new JSONObject().put("status","ok"));return; }
+            if (path.matches("/api/chart/[0-9]+")) { long id=Long.parseLong(path.substring("/api/chart/".length())); if("POST".equals(method)){ChartDb.add(id);sendJson(ex,201,new JSONObject().put("added",true));}else if("DELETE".equals(method))sendJson(ex,200,new JSONObject().put("removed",ChartDb.remove(id)));else methodNotAllowed(ex);return; }
             // Справочник позиций из Книга1 хранится в таблице основной базы kip.db.
             if (path.equals("/api/reference-positions")) {
                 if ("GET".equals(method)) sendJson(ex, 200, PositionDirectory.list());
@@ -221,57 +231,7 @@ public class ApiHandler implements HttpHandler {
                 return;
             }
 
-            // Документы: отдельная сущность с множественной привязкой приборов.
-            if (path.equals("/api/documents")) {
-                if ("GET".equals(method)) {
-                    sendJson(ex, 200, Db.getDocuments());
-                } else if ("POST".equals(method)) {
-                    JSONObject b = readJson(ex);
-                    String title = b.optString("title", "").trim();
-                    if (title.isEmpty()) { sendJson(ex, 400, new JSONObject().put("error", "Название документа обязательно")); return; }
-                    long id = Db.createDocument(title, emptyToNull(b.optString("documentNumber", "")),
-                            emptyToNull(b.optString("description", "")), b.optJSONObject("customFields"), currentUserName());
-                    sendJson(ex, 201, Db.getDocument(id));
-                } else methodNotAllowed(ex);
-                return;
-            }
-            if (path.startsWith("/api/documents/")) {
-                String tail = path.substring("/api/documents/".length());
-                String[] parts = tail.split("/");
-                long documentId = Long.parseLong(parts[0]);
-                if (parts.length == 1) {
-                    if ("GET".equals(method)) {
-                        JSONObject doc = Db.getDocument(documentId);
-                        if (doc == null) sendJson(ex, 404, new JSONObject().put("error", "document not found"));
-                        else sendJson(ex, 200, doc);
-                    } else if ("PUT".equals(method)) {
-                        JSONObject b = readJson(ex);
-                        String title = b.optString("title", "").trim();
-                        if (title.isEmpty()) { sendJson(ex, 400, new JSONObject().put("error", "Название документа обязательно")); return; }
-                        boolean ok = Db.updateDocument(documentId, title, emptyToNull(b.optString("documentNumber", "")),
-                                emptyToNull(b.optString("description", "")), b.optJSONObject("customFields"), currentUserName());
-                        if (!ok) sendJson(ex, 404, new JSONObject().put("error", "document not found"));
-                        else sendJson(ex, 200, Db.getDocument(documentId));
-                    } else if ("DELETE".equals(method)) {
-                        if (Db.deleteDocument(documentId, currentUserName())) ex.sendResponseHeaders(204, -1);
-                        else sendJson(ex, 404, new JSONObject().put("error", "document not found"));
-                    } else methodNotAllowed(ex);
-                    return;
-                }
-                if (parts.length == 3 && "devices".equals(parts[1])) {
-                    long deviceId = Long.parseLong(parts[2]);
-                    if ("POST".equals(method)) {
-                        Db.attachDevice(documentId, deviceId, currentUserName());
-                        sendJson(ex, 200, Db.getDocument(documentId));
-                    } else if ("DELETE".equals(method)) {
-                        Db.detachDevice(documentId, deviceId, currentUserName());
-                        sendJson(ex, 200, Db.getDocument(documentId));
-                    } else methodNotAllowed(ex);
-                    return;
-                }
-                sendJson(ex, 404, new JSONObject().put("error", "not found"));
-                return;
-            }
+            // API документов удалён вместе с таблицами документов.
 
             if (path.equals("/api/movements/batch")) {
                 if (!"POST".equals(method)) { methodNotAllowed(ex); return; }
@@ -316,14 +276,14 @@ public class ApiHandler implements HttpHandler {
             if (path.matches("/api/devices/[0-9]+/movements")) {
                 long deviceId = Long.parseLong(path.split("/")[3]);
                 if ("GET".equals(method)) {
-                    sendJson(ex, 200, new JSONObject().put("movements", Db.getDeviceMovementHistory(deviceId)).put("documents", Db.getDeviceDocumentHistory(deviceId)));
+                    sendJson(ex, 200, new JSONObject().put("movements", Db.getDeviceMovementHistory(deviceId)));
                 } else if ("POST".equals(method)) {
                     JSONObject b=readJson(ex);
                     String eventDate=b.optString("eventDate", LocalDate.now().toString()).trim();
                     String eventType=b.optString("eventType","").trim();
                     if (eventType.isEmpty() || !eventDate.matches("\\d{4}-\\d{2}-\\d{2}")) { sendJson(ex,400,new JSONObject().put("error","Укажите тип операции и корректную дату")); return; }
                     Db.addDeviceMovement(deviceId,eventDate,eventType,emptyToNull(b.optString("fromPlace","")),emptyToNull(b.optString("toPlace","")),emptyToNull(b.optString("note","")),currentUserName());
-                    sendJson(ex,201,new JSONObject().put("movements",Db.getDeviceMovementHistory(deviceId)).put("documents",Db.getDeviceDocumentHistory(deviceId)));
+                    sendJson(ex,201,new JSONObject().put("movements",Db.getDeviceMovementHistory(deviceId)));
                 } else methodNotAllowed(ex);
                 return;
             }

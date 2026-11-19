@@ -425,9 +425,24 @@ async function loadTrash() {
     return r.json();
 }
 
+function updateWorkflowTabBadges() {
+    const counts = {
+        positions: state.devices.filter(d => locationStatusOf(d) === 'На позиции').length,
+        warehouse: state.devices.filter(d => locationStatusOf(d) === 'Склад').length
+    };
+    for (const [key, count] of Object.entries(counts)) {
+        const badge = document.querySelector('.tab[data-tab="' + key + '"] .tab-count-badge');
+        if (!badge) continue;
+        badge.textContent = String(count);
+        badge.hidden = false;
+        badge.setAttribute('aria-label', count + ' приборов');
+    }
+}
+
 function render() {
     renderAllTab();
     Object.keys(workflowTabs).forEach(renderWorkflowTab);
+    updateWorkflowTabBadges();
 }
 
 function formatTableDate(value) {
@@ -507,14 +522,19 @@ function renderAllTab() {
     $('#tableAll tbody').innerHTML = rows.map(d => {
         const ref = referencePositionForDevice(d);
         return `<tr data-id="${d.id}">
-        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
+        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td>
+        <td>${escapeHtml(ref ? (ref.equipment || '—') : (d.groupName || '—'))}</td>
+        <td>${escapeHtml(ref ? (ref.description || '—') : (d.positionName || d.name || '—'))}</td>
+        <td>${escapeHtml(d.location || '—')}</td>
         <td>${escapeHtml(formatScale(d))}</td>
-        <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
-        <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
-        <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
+        <td>${escapeHtml(d.category || '—')}</td>
+        <td>${formatTableDate(d.lastVerification)}</td>
+        <td>${escapeHtml(d.mpi || '—')}</td>
+        <td>${formatTableDate(d.nextVerification)}</td>
+        <td>${escapeHtml(d.accuracyClass || '—')}</td>
+        <td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td>
-        <td>${escapeHtml(ref ? (ref.equipment || '—') : (d.groupName || '—'))}</td><td>${escapeHtml(ref ? (ref.description || '—') : (d.positionName || '—'))}</td>
         <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`;
     }).join('');
@@ -522,6 +542,8 @@ function renderAllTab() {
     const emptyEl = $('#emptyAll');
     if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
 }
+
+
 
 
 /* =========================================================
@@ -538,7 +560,6 @@ const workflowTabs = {
     ] }
 };
 const workflowSelection = { positions: new Set(), warehouse: new Set(), kip: new Set() };
-const recentlyMovedToWarehouse = new Set();
 const workflowFilters = { positions: {}, warehouse: {}, kip: {} };
 
 function initializeWorkflowTabs() {
@@ -576,16 +597,14 @@ function initializeWorkflowTabs() {
                 ? `<input type="checkbox" class="workflow-select-all" aria-label="Выбрать все видимые приборы">`
                 : '';
             tr.prepend(th);
-            if (key === 'warehouse' && index === 0) {
-                const dateTh = document.createElement('th');
-                dateTh.className = 'warehouse-date-column';
-                dateTh.textContent = 'Дата поступления на склад';
-                // Дата располагается после колонки «Тип датчика».
+            if (key === 'warehouse') {
+                const dateCell = document.createElement('th');
+                dateCell.className = 'warehouse-date-column';
+                dateCell.textContent = index === 0 ? 'Дата поступления на склад' : '';
                 const sensorHeader = [...tr.children].find(el => el.textContent.trim() === 'Тип датчика');
-                if (sensorHeader) sensorHeader.after(dateTh);
-                else tr.appendChild(dateTh);
-            }
-        });
+                if (sensorHeader) sensorHeader.after(dateCell);
+                else tr.appendChild(dateCell);
+            }        });
         wrap.appendChild(table);
         const empty = document.createElement('div');
         empty.className = 'empty workflow-empty';
@@ -655,15 +674,6 @@ function renderWorkflowTab(key) {
     if (!table) return;
     const query = (host.querySelector('.workflow-search')?.value || '').toLowerCase().trim();
     const filters = workflowFilters[key];
-    // Последняя складская партия определяется по сохранённому сервером workflowMovedAt.
-    let latestWarehouseStamp = '';
-    if (key === 'warehouse') {
-        latestWarehouseStamp = state.devices.filter(d => locationStatusOf(d) === 'Склад' && d.workflowMovedAt)
-            .map(d => String(d.workflowMovedAt)).sort().pop() || '';
-        recentlyMovedToWarehouse.clear();
-        if (latestWarehouseStamp) state.devices.filter(d => locationStatusOf(d) === 'Склад' && String(d.workflowMovedAt) === latestWarehouseStamp)
-            .forEach(d => recentlyMovedToWarehouse.add(Number(d.id)));
-    }
     let rows = state.devices.filter(device => {
         if (locationStatusOf(device) !== config.status) return false;
         if (query && ![device.name,device.location,device.serialNumber,device.sensorType,device.unit,device.category,device.groupName,device.positionName,device.redLine].join(' ').toLowerCase().includes(query)) return false;
@@ -697,17 +707,25 @@ function renderWorkflowTab(key) {
         const ref = referencePositionForDevice(d);
         const equipment = ref ? ref.equipment : d.groupName;
         const positionName = ref ? ref.description : (d.positionName || d.name);
-        return `<tr data-id="${d.id}" class="${key === 'warehouse' && recentlyMovedToWarehouse.has(Number(d.id)) ? 'workflow-recently-moved' : ''}">
+        return `<tr data-id="${d.id}">
         <td class="workflow-select-cell"><input type="checkbox" class="workflow-device-check" data-id="${d.id}" aria-label="Выбрать прибор" ${workflowSelection[key].has(Number(d.id)) ? 'checked' : ''}></td>
-        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
-        <td>${escapeHtml(d.sensorType || '—')}</td>${key === 'warehouse' ? `<td class="warehouse-date-column">${escapeHtml(formatWorkflowTimestamp(d.workflowMovedAt))}</td>` : ''}<td>${escapeHtml(formatScale(d))}</td>
-        <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
-        <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
-        <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
-        <td>${escapeHtml(d.deferredVerification || '—')}</td><td>${escapeHtml(equipment || '—')}</td>
+        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td>
+        <td>${escapeHtml(d.sensorType || '—')}</td>
+        <td>${escapeHtml(equipment || '—')}</td>
         <td>${escapeHtml(positionName || '—')}</td>
+        <td>${escapeHtml(d.location || '—')}</td>
+        ${key === 'warehouse' ? `<td class="warehouse-date-column">${escapeHtml(formatWorkflowTimestamp(d.workflowMovedAt))}</td>` : ''}
+        <td>${escapeHtml(formatScale(d))}</td>
+        <td>${escapeHtml(d.category || '—')}</td>
+        <td>${formatTableDate(d.lastVerification)}</td>
+        <td>${escapeHtml(d.mpi || '—')}</td>
+        <td>${formatTableDate(d.nextVerification)}</td>
+        <td>${escapeHtml(d.accuracyClass || '—')}</td>
+        <td>${escapeHtml(d.redLine || '—')}</td>
+        <td>${escapeHtml(d.deferredVerification || '—')}</td>
     </tr>`;
     }).join('');
+
     const empty = host.querySelector('.workflow-empty');
     if (empty) empty.hidden = rows.length > 0;
     const selectAll = table.querySelector('.workflow-select-all');
@@ -826,7 +844,6 @@ async function moveSelectedDevices(fromTab, action) {
         if (moved && destinationTab) {
             clearWorkflowTabSelection(destinationTab);
             successful.forEach(item => workflowSelection[destinationTab].add(Number(item.id)));
-            if (destinationTab === 'warehouse') successful.forEach(item => recentlyMovedToWarehouse.add(Number(item.id)));
             render();
             window.location.hash = destinationTab;
             switchTab(destinationTab);
@@ -841,6 +858,7 @@ async function moveSelectedDevices(fromTab, action) {
         finishLoading();
     }
 }
+
 
 let movementsLoadAll = false;
 let movementsSearchTimer = null;
@@ -1120,6 +1138,9 @@ function switchTab(tabName) {
     if (panel) panel.classList.add('active');
 
     state.currentTab = tabName;
+    const titles = {"all":"Все приборы","positions":"На позиции","warehouse":"Склад","kip":"КИП","movements":"Перемещения","audit":"Журнал","trash":"Корзина","position-directory":"Справочник позиций","chart":"График","users":"Пользователи","help":"Инструкция"};
+    const pageTitle = $('#pageTitle');
+    if (pageTitle) pageTitle.textContent = 'Приборы КИП : ' + (titles[tabName] || 'Все приборы');
 
     if (!state.user) return;
     if (workflowTabs[tabName]) renderWorkflowTab(tabName);
@@ -1128,13 +1149,8 @@ function switchTab(tabName) {
     if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
     if (tabName === 'trash') renderTrashTab();
     if (tabName === 'position-directory') renderReferencePositions();
+    if (tabName === 'chart') loadChart().catch(e => showToast('Ошибка загрузки графика', e.message, 'error'));
     if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
-    if (tabName === 'documents') {
-        state.currentDocument = null;
-        $('#documentWorkspace').hidden = true;
-        $('#documentsListView').hidden = false;
-        loadDocuments().catch(e => showToast('Ошибка загрузки документов', e.message, 'error'));
-    }
 }
 
 async function handleAppRoute() {
@@ -1149,7 +1165,7 @@ async function handleAppRoute() {
         return;
     }
 
-    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'documents', 'movements', 'audit', 'trash', 'position-directory', 'chart', 'help', 'users'];
+    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'movements', 'audit', 'trash', 'position-directory', 'chart', 'help', 'users'];
     switchTab(allowedTabs.includes(hash) ? hash : 'all');
 }
 
@@ -1209,6 +1225,8 @@ function applyRoleUI() {
     if (cur) cur.textContent = state.user ? `${state.user.name} · ${roleTitle(state.user.role)}` : 'Не выполнен вход';
     const logout = $('#logoutBtn');
     if (logout) logout.hidden = !state.user;
+    const userMenu = $('#userMenu');
+    if (userMenu && !state.user) userMenu.removeAttribute('open');
     if (state.user) $('#userSelect').value = state.user.login;
 }
 
@@ -1282,6 +1300,7 @@ async function loginSelectedUser(password = '') {
 }
 
 $('#userSelect').addEventListener('change', async () => {
+    $('#userMenu')?.removeAttribute('open');
     const login = $('#userSelect').value;
     if (!login) return;
     if (login.toLowerCase() === 'guest') {
@@ -1306,6 +1325,7 @@ $('#cancelLoginBtn').addEventListener('click', () => {
     $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#userSelect').value = state.user ? state.user.login : '';
 });
 $('#logoutBtn').addEventListener('click', async () => {
+    $('#userMenu')?.removeAttribute('open');
     await apiFetch('/api/auth/logout', {method:'POST'});
     state.user = null;
     $('#userSelect').value = 'guest';
@@ -1571,6 +1591,16 @@ $('#tableDocumentDevices').addEventListener('click', async e => {
     if (!r.ok) { showToast('Ошибка', 'HTTP ' + r.status, 'error'); return; }
     state.currentDocument = await r.json(); renderDocumentWorkspace(); await loadDocuments();
 });
+
+/* График: отдельный список ссылок на приборы с сохранением порядка. */
+let chartRows = []; let chartSearchTimer = null;
+async function loadChart(){const r=await apiFetch('/api/chart');if(!r.ok)throw new Error('HTTP '+r.status);chartRows=await r.json();renderChart();}
+function renderChart(){const body=$('#tableChart tbody');if(!body)return;body.innerHTML=chartRows.map((d,i)=>`<tr><td>${i+1}</td><td><button class="btn-link" data-chart-open="${d.id}">${escapeHtml(d.serialNumber||'—')}</button></td><td>${escapeHtml(d.sensorType||'—')}</td><td>${escapeHtml(d.groupName||'—')}</td><td>${escapeHtml(d.positionName||'—')}</td><td>${escapeHtml(d.location||'—')}</td><td>${escapeHtml(d.addedAt||'—')}</td><td class="chart-order"><button class="btn" data-chart-up="${d.id}" ${i===0?'disabled':''}>↑</button> <button class="btn" data-chart-down="${d.id}" ${i===chartRows.length-1?'disabled':''}>↓</button></td><td><button class="btn-danger" data-chart-remove="${d.id}">Убрать</button></td></tr>`).join('');$('#chartCount').textContent=chartRows.length+' приборов';$('#emptyChart').hidden=chartRows.length>0;}
+async function searchChartDevices(){const q=$('#chartSearch').value.trim(),box=$('#chartSearchResults');if(!q){box.hidden=true;box.innerHTML='';return;}const r=await apiFetch('/api/chart/search?q='+encodeURIComponent(q));if(!r.ok)throw new Error('HTTP '+r.status);const rows=await r.json();box.innerHTML=rows.map(d=>`<div class="chart-search-row"><div><strong>${escapeHtml(d.serialNumber||'Без номера')}</strong><span>${escapeHtml(d.sensorType||'—')} · ${escapeHtml(d.positionName||d.location||'Без позиции')}</span></div><button class="${d.inChart?'btn':'btn-primary'}" data-chart-add="${d.id}" ${d.inChart?'disabled':''}>${d.inChart?'Уже в графике':'Добавить'}</button></div>`).join('')||'<div class="empty">Приборы не найдены</div>';box.hidden=false;}
+$('#chartSearch')?.addEventListener('input',()=>{clearTimeout(chartSearchTimer);chartSearchTimer=setTimeout(()=>searchChartDevices().catch(e=>showToast('Ошибка поиска',e.message,'error')),220);});
+$('#chartRefreshBtn')?.addEventListener('click',()=>loadChart().catch(e=>showToast('Ошибка графика',e.message,'error')));
+$('#chartSearchResults')?.addEventListener('click',async e=>{const b=e.target.closest('[data-chart-add]');if(!b)return;b.disabled=true;try{const r=await apiFetch('/api/chart/'+b.dataset.chartAdd,{method:'POST'});if(!r.ok)throw new Error('Не удалось добавить прибор');await loadChart();await searchChartDevices();}catch(err){b.disabled=false;showToast('Ошибка добавления',err.message,'error');}});
+$('#tableChart')?.addEventListener('click',async e=>{const open=e.target.closest('[data-chart-open]');if(open){const d=state.devices.find(x=>Number(x.id)===Number(open.dataset.chartOpen));if(d)openViewModal(d);return;}const rm=e.target.closest('[data-chart-remove]');if(rm){const r=await apiFetch('/api/chart/'+rm.dataset.chartRemove,{method:'DELETE'});if(!r.ok){showToast('Ошибка','Не удалось убрать прибор','error');return;}await loadChart();return;}const move=e.target.closest('[data-chart-up],[data-chart-down]');if(move){const id=Number(move.dataset.chartUp||move.dataset.chartDown),i=chartRows.findIndex(x=>Number(x.id)===id),j=i+(move.hasAttribute('data-chart-up')?-1:1);if(i<0||j<0||j>=chartRows.length)return;[chartRows[i],chartRows[j]]=[chartRows[j],chartRows[i]];const r=await apiFetch('/api/chart/order',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:chartRows.map(x=>x.id)})});if(!r.ok){await loadChart();showToast('Ошибка','Не удалось сохранить порядок','error');return;}renderChart();}});
 
 /* =========================================================
  *  ОБРАБОТЧИКИ "ВСЕ ПРИБОРЫ"
@@ -2109,8 +2139,19 @@ document.addEventListener('keydown', (event) => {
 /* =========================================================
  *  СТАРТ
  * ========================================================= */
+function updateLiveClock() {
+    const clock = $('#liveClock');
+    if (!clock) return;
+    const now = new Date();
+    clock.textContent = new Intl.DateTimeFormat('ru-RU', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).format(now);
+}
 document.addEventListener('DOMContentLoaded', () => {
     initializeWorkflowTabs();
+    updateLiveClock();
+    window.setInterval(updateLiveClock, 1000);
     initializeAuth();
 });
 

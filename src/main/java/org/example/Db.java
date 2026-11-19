@@ -117,33 +117,6 @@ public class Db {
             migrateDateColumnsToDateType(s);
 
             s.execute("""
-                CREATE TABLE IF NOT EXISTS documents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    document_number TEXT,
-                    description TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT,
-                    custom_fields_json TEXT NOT NULL DEFAULT '{}'
-                );
-                """);
-
-            s.execute("""
-                CREATE TABLE IF NOT EXISTS document_devices (
-                    document_id INTEGER NOT NULL,
-                    device_id INTEGER NOT NULL,
-                    added_at TEXT NOT NULL,
-                    PRIMARY KEY (document_id, device_id),
-                    FOREIGN KEY (document_id) REFERENCES documents(id),
-                    FOREIGN KEY (device_id) REFERENCES devices(id)
-                );
-                """);
-
-            // Миграции: поля документа можно расширять без изменения связей с приборами.
-            try { s.execute("ALTER TABLE documents ADD COLUMN custom_fields_json TEXT NOT NULL DEFAULT '{}'"); }
-            catch (SQLException ignored) {}
-
-            s.execute("""
                 CREATE TABLE IF NOT EXISTS device_movements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id INTEGER NOT NULL,
@@ -161,19 +134,9 @@ public class Db {
             s.execute("CREATE INDEX IF NOT EXISTS idx_device_movements_created ON device_movements(event_date DESC, created_at DESC, id DESC)");
             s.execute("CREATE INDEX IF NOT EXISTS idx_device_movements_batch ON device_movements(batch_id)");
 
-            s.execute("""
-                CREATE TABLE IF NOT EXISTS device_document_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id INTEGER NOT NULL,
-                    document_id INTEGER,
-                    document_title TEXT NOT NULL,
-                    document_number TEXT,
-                    event_type TEXT NOT NULL,
-                    event_date DATE NOT NULL,
-                    created_by TEXT,
-                    created_at TEXT NOT NULL
-                );
-                """);
+            s.execute("DROP TABLE IF EXISTS document_devices");
+            s.execute("DROP TABLE IF EXISTS device_document_history");
+            s.execute("DROP TABLE IF EXISTS documents");
 
             s.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -767,12 +730,11 @@ public class Db {
         try (Connection c = DriverManager.getConnection(DB_URL);
              PreparedStatement ps = c.prepareStatement(
                      "SELECT a.changed_at, a.changed_by, a.action, a.details, " +
-                             "COALESCE(doc.title, a.entity_name, d.name), " +
-                             "COALESCE(doc.document_number, a.entity_number, d.serial_number), a.device_id " +
+                             "COALESCE(a.entity_name, d.name), " +
+                             "COALESCE(a.entity_number, d.serial_number), a.device_id " +
                              "FROM audit_log a " +
                              "LEFT JOIN devices d ON a.device_id = d.id " +
-                             "LEFT JOIN documents doc ON a.document_id = doc.id " +
-                             "ORDER BY a.id DESC LIMIT ?")) {
+                                                          "ORDER BY a.id DESC LIMIT ?")) {
             ps.setInt(1, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {

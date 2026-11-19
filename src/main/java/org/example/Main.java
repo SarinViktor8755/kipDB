@@ -11,7 +11,9 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         Db.init();
+        WorkflowDb.init();
         PositionDirectory.init();
+        ChartDb.init();
         System.out.println("SQLite инициализирован: " + Db.getDatabasePath());
         System.out.println("Найдено приборов: " + Db.getAllDevices().size());
         System.out.println("Пользователей: " + Db.getUsersPublic().length() + " (включая администратора)");
