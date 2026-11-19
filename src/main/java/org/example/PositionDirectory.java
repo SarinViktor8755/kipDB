@@ -77,13 +77,31 @@ public final class PositionDirectory {
         description = clean(description);
         equipment = clean(equipment);
         if (position.isBlank()) throw new IllegalArgumentException("Поле «Позиция» обязательно");
-        try (Connection c = Db.openConnection();
-             PreparedStatement p = c.prepareStatement("UPDATE book_positions SET position=?,description=?,equipment=?,updated_at=datetime('now') WHERE id=?")) {
-            p.setString(1, position);
-            p.setString(2, description);
-            p.setString(3, equipment);
-            p.setLong(4, id);
-            if (p.executeUpdate() == 0) return null;
+        try (Connection c = Db.openConnection()) {
+            c.setAutoCommit(false);
+            try {
+                try (PreparedStatement p = c.prepareStatement("UPDATE book_positions SET position=?,description=?,equipment=?,updated_at=datetime('now') WHERE id=?")) {
+                    p.setString(1, position); p.setString(2, description); p.setString(3, equipment); p.setLong(4, id);
+                    if (p.executeUpdate() == 0) { c.rollback(); return null; }
+                }
+                // Сохраняем связь по ID справочника и синхронизируем все карточки, которые на него ссылаются.
+                try (PreparedStatement q = c.prepareStatement("SELECT d.id,d.details_json,d.location,w.status FROM devices d LEFT JOIN device_workflow w ON w.device_id=d.id WHERE json_extract(d.details_json,'$.referencePositionId')=? AND COALESCE(d.is_deleted,0)=0")) {
+                    q.setLong(1, id);
+                    try (ResultSet rs = q.executeQuery()) {
+                        while (rs.next()) {
+                            JSONObject details;
+                            try { details = new JSONObject(rs.getString("details_json")); } catch (Exception ignored) { details = new JSONObject(); }
+                            details.put("groupName", equipment).put("positionName", description);
+                            String location = rs.getString("location");
+                            if ("INSTALLED".equals(rs.getString("status"))) location = position;
+                            try (PreparedStatement u = c.prepareStatement("UPDATE devices SET name=?,location=?,details_json=?,version=version+1 WHERE id=?")) {
+                                u.setString(1, description.isBlank() ? "Без позиции" : description); u.setString(2, location); u.setString(3, details.toString()); u.setLong(4, rs.getLong("id")); u.executeUpdate();
+                            }
+                        }
+                    }
+                }
+                c.commit();
+            } catch (Exception e) { c.rollback(); if (e instanceof SQLException se) throw se; throw new SQLException(e); }
         }
         try (Connection c = Db.openConnection(); PreparedStatement p = c.prepareStatement(
                 "SELECT id,position,description,equipment,source_page,updated_at FROM book_positions WHERE id=?")) {
