@@ -893,13 +893,6 @@ button[data-busy="1"] .btn-spinner {
 #referencePositionPager { align-items:center; }
 
 
-/* Разделы складского учёта визуально различаются по назначению. */
-.tabs .tab[data-tab="positions"] { color:#166534; background:#e8f5ec; border-color:#b7dfc3; }
-.tabs .tab[data-tab="positions"].active { color:#fff; background:#23834a; border-color:#23834a; }
-.tabs .tab[data-tab="warehouse"] { color:#92400e; background:#fff4df; border-color:#f2d39a; }
-.tabs .tab[data-tab="warehouse"].active { color:#fff; background:#b7791f; border-color:#b7791f; }
-.tabs .tab[data-tab="kip"] { color:#5b21b6; background:#f1eafe; border-color:#d7c4fa; }
-.tabs .tab[data-tab="kip"].active { color:#fff; background:#7040b5; border-color:#7040b5; }
 .danger-link { color:#b42318 !important; }
 
 .workflow-action-writeoff { background:#b42318 !important; border-color:#b42318 !important; color:#fff !important; }
@@ -1001,3 +994,50 @@ body.read-only #copyDeviceBtn { display: none !important; }
  .current-user { max-width:115px; overflow:hidden; text-overflow:ellipsis; }
  .user-menu-panel { right:0; }
 }
+
+
+/* Три рабочих раздела имеют разные, но сдержанные оттенки.
+   Цвет не зависит от того, какая вкладка сейчас активна. */
+.tabs .tab[data-tab="positions"] {
+    color: #b8d8f5;
+    background: rgba(59, 130, 246, .10);
+    border-color: rgba(96, 165, 250, .16);
+}
+.tabs .tab[data-tab="positions"]:hover,
+.tabs .tab[data-tab="positions"].active {
+    color: #e5f1ff;
+    background: rgba(59, 130, 246, .20);
+    border-color: rgba(96, 165, 250, .42);
+    box-shadow: inset 0 -3px 0 #60a5fa;
+}
+.tabs .tab[data-tab="warehouse"] {
+    color: #e7d4ad;
+    background: rgba(180, 130, 55, .10);
+    border-color: rgba(214, 165, 90, .16);
+}
+.tabs .tab[data-tab="warehouse"]:hover,
+.tabs .tab[data-tab="warehouse"].active {
+    color: #fff0cf;
+    background: rgba(180, 130, 55, .20);
+    border-color: rgba(214, 165, 90, .42);
+    box-shadow: inset 0 -3px 0 #d6a55a;
+}
+.tabs .tab[data-tab="kip"] {
+    color: #d5c2f5;
+    background: rgba(139, 92, 246, .10);
+    border-color: rgba(167, 139, 250, .16);
+}
+.tabs .tab[data-tab="kip"]:hover,
+.tabs .tab[data-tab="kip"].active {
+    color: #f0e8ff;
+    background: rgba(139, 92, 246, .20);
+    border-color: rgba(167, 139, 250, .42);
+    box-shadow: inset 0 -3px 0 #a78bfa;
+}
+
+/* Строки приборов не подсвечиваются зелёным после перемещения. */
+.workflow-recently-moved td {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+.workflow-recently-moved td:first-child { border-left: 0; }
