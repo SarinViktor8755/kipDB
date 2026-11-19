@@ -599,19 +599,28 @@ public class ApiHandler implements HttpHandler {
         List<Device> all = Db.getAllDevices();
         LocalDate today = LocalDate.now();
         LocalDate in30 = today.plusDays(30);
-        int overdue = 0, soon = 0, ok = 0;
+        int overdue = 0, soon = 0, ok = 0, positions = 0, warehouse = 0;
         for (Device d : all) {
-            if (d.nextVerification == null || d.nextVerification.isEmpty()) continue;
-            LocalDate nv = LocalDate.parse(d.nextVerification);
-            if (nv.isBefore(today)) overdue++;
-            else if (!nv.isAfter(in30)) soon++;
-            else ok++;
+            if (d.nextVerification != null && !d.nextVerification.isEmpty()) {
+                LocalDate nv = LocalDate.parse(d.nextVerification);
+                if (nv.isBefore(today)) overdue++;
+                else if (!nv.isAfter(in30)) soon++;
+                else ok++;
+            }
+            JSONObject details;
+            try { details = new JSONObject(d.detailsJson == null ? "{}" : d.detailsJson); }
+            catch (Exception ignored) { details = new JSONObject(); }
+            String workflow = details.optString("workflowStatus", "");
+            if ("INSTALLED".equals(workflow) || (!"WRITTEN_OFF".equals(workflow) && !"WAREHOUSE".equals(workflow) && !"KIP".equals(workflow) && d.location != null && !d.location.isBlank())) positions++;
+            else if ("WAREHOUSE".equals(workflow) || (workflow.isBlank() && (d.location == null || d.location.isBlank()))) warehouse++;
         }
         sendJson(ex, 200, new JSONObject()
                 .put("total", all.size())
                 .put("overdue", overdue)
                 .put("soon", soon)
-                .put("ok", ok));
+                .put("ok", ok)
+                .put("positions", positions)
+                .put("warehouse", warehouse));
     }
 
     private void exportDevicesCsv(HttpExchange ex) throws IOException, SQLException {
