@@ -33,11 +33,11 @@ public final class PositionDirectory {
 
     /** Однократно связывает старые карточки с ID справочника по коду позиции или паре оборудование/наименование. */
     private static void linkExistingDevices() throws SQLException {
-        String sql = "UPDATE devices SET details_json=json_set(COALESCE(details_json,'{}'),'$.referencePositionId',(" +
+        String sql = "UPDATE devices SET details_json=json_set(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END,'$.referencePositionId',(" +
                 "SELECT b.id FROM book_positions b WHERE b.position=devices.location COLLATE NOCASE " +
-                "OR (b.description=json_extract(devices.details_json,'$.positionName') COLLATE NOCASE " +
-                "AND b.equipment=json_extract(devices.details_json,'$.groupName') COLLATE NOCASE) LIMIT 1)) " +
-                "WHERE COALESCE(is_deleted,0)=0 AND json_extract(COALESCE(details_json,'{}'),'$.referencePositionId') IS NULL " +
+                "OR (b.description=json_extract(CASE WHEN json_valid(devices.details_json) THEN devices.details_json ELSE '{}' END,'$.positionName') COLLATE NOCASE " +
+                "AND b.equipment=json_extract(CASE WHEN json_valid(devices.details_json) THEN devices.details_json ELSE '{}' END,'$.groupName') COLLATE NOCASE) LIMIT 1)) " +
+                "WHERE COALESCE(is_deleted,0)=0 AND json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END,'$.referencePositionId') IS NULL " +
                 "AND EXISTS(SELECT 1 FROM book_positions b WHERE b.position=devices.location COLLATE NOCASE " +
                 "OR (b.description=json_extract(devices.details_json,'$.positionName') COLLATE NOCASE " +
                 "AND b.equipment=json_extract(devices.details_json,'$.groupName') COLLATE NOCASE))";
@@ -99,7 +99,7 @@ public final class PositionDirectory {
                 }
                 // Сохраняем связь по ID справочника и синхронизируем все карточки, которые на него ссылаются.
                 JSONArray linkedDevices = new JSONArray();
-                try (PreparedStatement q = c.prepareStatement("SELECT d.id,d.details_json,d.location,w.status FROM devices d LEFT JOIN device_workflow w ON w.device_id=d.id WHERE json_extract(d.details_json,'$.referencePositionId')=? AND COALESCE(d.is_deleted,0)=0")) {
+                try (PreparedStatement q = c.prepareStatement("SELECT d.id,d.details_json,d.location,w.status FROM devices d LEFT JOIN device_workflow w ON w.device_id=d.id WHERE json_extract(CASE WHEN json_valid(d.details_json) THEN d.details_json ELSE '{}' END,'$.referencePositionId')=? AND COALESCE(d.is_deleted,0)=0")) {
                     q.setLong(1, id);
                     try (ResultSet rs = q.executeQuery()) {
                         while (rs.next()) linkedDevices.put(new JSONObject()
