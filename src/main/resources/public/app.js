@@ -410,6 +410,7 @@ async function loadMoreDevicePages() {
         const data = await fetchDevicePage(150, state.pageOffset);
         const items = data.items || [];
         state.allPageRows.push(...items);
+        if (!state.workflowDataLoaded) state.devices = state.allPageRows.slice();
         state.pageOffset += items.length;
         state.pageHasMore = !!data.hasMore;
         renderAllTab();
@@ -443,6 +444,7 @@ async function reloadDevicePageFromFilters() {
         const data = await fetchDevicePage(500, 0);
         if (requestId !== deviceFilterRequest) return;
         state.allPageRows = data.items || [];
+        if (!state.workflowDataLoaded) state.devices = state.allPageRows.slice();
         state.pageOffset = state.allPageRows.length;
         state.pageHasMore = !!data.hasMore;
         renderAllTab();
@@ -1186,7 +1188,7 @@ function switchTab(tabName) {
     if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
     if (tabName === 'trash') renderTrashTab();
     if (tabName === 'position-directory') renderReferencePositions();
-    if (tabName === 'chart') loadChart().catch(e => showToast('Ошибка загрузки графика', e.message, 'error'));
+    if (tabName === 'chart') loadFullDevicesForWorkflow().then(() => loadChart()).catch(e => showToast('Ошибка загрузки графика', e.message, 'error'));
     if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
 }
 
