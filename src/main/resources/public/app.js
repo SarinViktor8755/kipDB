@@ -41,6 +41,7 @@ function persistDeviceCache(etag, data) {
 const state = {
     selectedDocumentDeviceId: null,
     devices: [],
+    allPageRows: [],
     referencePositions: [],
     referencePositionIndex: new Map(),
     referencePositionPage: 0,
@@ -54,7 +55,11 @@ const state = {
     columnFilters: {}, // текстовые фильтры: { col: 'строка' }
     // Сортировки по столбцам.
     // По умолчанию «Дата следующей поверки» — ASC: ближайшие поверки сверху.
-    columnSorts: { nextVerification: 'asc' }
+    columnSorts: { nextVerification: 'asc' },
+    pageOffset: 0,
+    pageHasMore: false,
+    pageLoading: false,
+    workflowDataLoaded: false
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -350,22 +355,19 @@ function updateDatalists() {
 async function loadAll() {
     const wrap = document.getElementById('devicesTableWrap');
     const tbody = document.querySelector('#tableAll tbody');
-
-    // Сначала мгновенно показываем последний сохранённый список, не ожидая сеть.
-    const hadCache = restoreDeviceCache();
-    if (hadCache) {
-        render();
-        updateDatalists();
-    }
-
+    // Старый кеш содержал всю базу; больше не восстанавливаем его в браузер.
+    try { localStorage.removeItem(DEVICE_CACHE_KEY); } catch (_) {}
+    state.allPageRows = [];
+    state.pageOffset = 0;
+    state.pageHasMore = true;
     beginLoading();
     setTableBusy(wrap, true);
-    if (!state.devices.length) renderSkeleton(tbody, 8, 16);
-
+    renderSkeleton(tbody, 8, 14);
     try {
         await Promise.all([loadDevices(), loadStats(), loadReferencePositions()]);
-        render();
+        renderAllTab();
         updateDatalists();
+        installDevicePageObserver();
     } finally {
         setTableBusy(wrap, false);
         finishLoading();
@@ -373,14 +375,90 @@ async function loadAll() {
 }
 
 async function loadDevices() {
-    const headers = {};
-    if (deviceCacheEtag) headers['If-None-Match'] = deviceCacheEtag;
-    const r = await apiFetch('/api/devices', { headers });
-    if (r.status === 304) return; // список не изменился — оставляем данные из localStorage
+    state.pageOffset = 0;
+    state.allPageRows = [];
+    state.pageHasMore = true;
+    const data = await fetchDevicePage(500, 0);
+    state.allPageRows = data.items || [];
+    state.pageOffset = state.allPageRows.length;
+    state.pageHasMore = !!data.hasMore;
+    state.devices = state.allPageRows.slice();
+}
+
+async function fetchDevicePage(limit, offset) {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    params.set('q', ($('#searchAll')?.value || '').trim());
+    params.set('status', $('#statusFilter')?.value || '');
+    params.set('filters', JSON.stringify(state.columnFilters));
+    const sorts = Object.entries(state.columnSorts).filter(([,v]) => v);
+    const sort = sorts.length ? sorts[sorts.length - 1] : ['nextVerification','asc'];
+    params.set('sort', sort[0]);
+    params.set('direction', sort[1]);
+    const r = await apiFetch('/api/devices/page?' + params.toString());
+    if (!r.ok) throw new Error('devices page: ' + r.status);
+    return r.json();
+}
+
+async function loadMoreDevicePages() {
+    if (state.pageLoading || !state.pageHasMore || state.currentTab !== 'all') return;
+    state.pageLoading = true;
+    try {
+        const data = await fetchDevicePage(150, state.pageOffset);
+        const items = data.items || [];
+        state.allPageRows.push(...items);
+        state.pageOffset += items.length;
+        state.pageHasMore = !!data.hasMore;
+        renderAllTab();
+    } catch (e) {
+        showToast('Ошибка загрузки следующей страницы', e.message, 'error');
+    } finally {
+        state.pageLoading = false;
+    }
+}
+
+let devicePageObserver = null;
+function installDevicePageObserver() {
+    const sentinel = document.getElementById('devicePageSentinel');
+    if (!sentinel || !('IntersectionObserver' in window)) return;
+    if (devicePageObserver) devicePageObserver.disconnect();
+    devicePageObserver = new IntersectionObserver(entries => {
+        if (entries.some(x => x.isIntersecting)) loadMoreDevicePages();
+    }, { root: document.getElementById('devicesTableWrap'), rootMargin: '500px' });
+    devicePageObserver.observe(sentinel);
+}
+
+let deviceFilterRequest = 0;
+async function reloadDevicePageFromFilters() {
+    const requestId = ++deviceFilterRequest;
+    state.allPageRows = [];
+    state.pageOffset = 0;
+    state.pageHasMore = true;
+    const tbody = document.querySelector('#tableAll tbody');
+    renderSkeleton(tbody, 5, 14);
+    try {
+        const data = await fetchDevicePage(500, 0);
+        if (requestId !== deviceFilterRequest) return;
+        state.allPageRows = data.items || [];
+        state.pageOffset = state.allPageRows.length;
+        state.pageHasMore = !!data.hasMore;
+        renderAllTab();
+    } catch (e) {
+        if (requestId === deviceFilterRequest) showToast('Ошибка фильтрации приборов', e.message, 'error');
+    }
+}
+
+async function loadFullDevicesForWorkflow() {
+    if (state.workflowDataLoaded) return;
+    const r = await apiFetch('/api/devices');
     if (!r.ok) throw new Error('devices: ' + r.status);
-    const data = await r.json();
-    state.devices = data;
-    persistDeviceCache(r.headers.get('ETag'), data);
+    state.devices = await r.json();
+    state.workflowDataLoaded = true;
+    renderWorkflowTab('positions');
+    renderWorkflowTab('warehouse');
+    renderWorkflowTab('kip');
+    updateWorkflowTabBadges();
 }
 
 async function loadReferencePositions() {
@@ -472,53 +550,7 @@ function formatScale(device) {
  *       поэтому порядок сохраняется даже после фильтрации на клиенте.
  * ========================================================= */
 function renderAllTab() {
-    const q = ($('#searchAll').value || '').toLowerCase().trim();
-    const fEl = $('#statusFilter');
-    const f = fEl ? fEl.value : '';
-
-    // Активные текстовые фильтры
-    const activeCols = Object.entries(state.columnFilters)
-        .filter(([, v]) => v && v.trim() !== '');
-
-    let rows = state.devices.filter(d => {
-        if (q) {
-            const ref = referencePositionForDevice(d);
-            const haystack = [d.name,d.location,d.serialNumber,d.sensorType,d.unit,d.category,d.groupName,d.positionName,ref && ref.description,ref && ref.equipment,d.redLine].join(' ').toLowerCase();
-            if (!haystack.includes(q)) return false;
-        }
-        if (f && statusOf(d) !== f) return false;
-        for (const [col, needle] of activeCols) {
-            const value = String(cellValueForColumn(d, col) || '').toLowerCase();
-            if (!value.includes(needle)) return false;
-        }
-        return true;
-    });
-
-    // Сортировка.
-    const hasExplicitSort = Object.values(state.columnSorts).some(v => v);
-    rows.sort((a, b) => {
-        if (hasExplicitSort) {
-            for (const [col, dir] of Object.entries(state.columnSorts)) {
-                if (!dir) continue;
-                const av = a[col] || '';
-                const bv = b[col] || '';
-                if (av === bv) continue;
-                // Пустые значения всегда в конце независимо от направления
-                if (!av) return 1;
-                if (!bv) return -1;
-                return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-            }
-        }
-        // Fallback: ближайшие даты следующей поверки сверху, пустые — в конце.
-        // ISO-даты (YYYY-MM-DD) корректно сравниваются как строки.
-        const an = a.nextVerification || '';
-        const bn = b.nextVerification || '';
-        if (!an && !bn) return 0;
-        if (!an) return 1;
-        if (!bn) return -1;
-        return an.localeCompare(bn);
-    });
-
+    const rows = state.allPageRows || [];
     $('#tableAll tbody').innerHTML = rows.map(d => {
         const ref = referencePositionForDevice(d);
         return `<tr data-id="${d.id}">
@@ -538,12 +570,11 @@ function renderAllTab() {
         <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`;
     }).join('');
-
     const emptyEl = $('#emptyAll');
     if (emptyEl) emptyEl.hidden = rows.length !== 0 || __loadingDepth > 0;
+    const sentinel = $('#devicePageSentinel');
+    if (sentinel) sentinel.textContent = state.pageLoading ? 'Загрузка…' : (state.pageHasMore ? 'Прокрутите вниз для загрузки следующих приборов' : 'Все приборы загружены');
 }
-
-
 
 
 /* =========================================================
@@ -1143,7 +1174,7 @@ function switchTab(tabName) {
     if (pageTitle) pageTitle.textContent = 'Приборы КИП : ' + (titles[tabName] || 'Все приборы');
 
     if (!state.user) return;
-    if (workflowTabs[tabName]) renderWorkflowTab(tabName);
+    if (workflowTabs[tabName]) loadFullDevicesForWorkflow().catch(e => showToast('Ошибка загрузки списка', e.message, 'error'));
     if (tabName === 'users' && state.user.role !== 'admin') { window.location.hash = 'all'; return; }
     if (tabName === 'audit') renderAuditTab(200);
     if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
@@ -1605,8 +1636,8 @@ $('#tableChart')?.addEventListener('click',async e=>{const open=e.target.closest
 /* =========================================================
  *  ОБРАБОТЧИКИ "ВСЕ ПРИБОРЫ"
  * ========================================================= */
-$('#searchAll').addEventListener('input', debounce(renderAllTab, 180));
-if ($('#statusFilter')) $('#statusFilter').addEventListener('change', renderAllTab);
+$('#searchAll').addEventListener('input', debounce(reloadDevicePageFromFilters, 250));
+if ($('#statusFilter')) $('#statusFilter').addEventListener('change', reloadDevicePageFromFilters);
 
 // Текстовые фильтры по столбцам
 $all('.col-filter').forEach(inp => {
@@ -1615,8 +1646,8 @@ $all('.col-filter').forEach(inp => {
         const value = (inp.value || '').toLowerCase().trim();
         if (value) state.columnFilters[col] = value;
         else delete state.columnFilters[col];
-        renderAllTab();
-    }, 200));
+        reloadDevicePageFromFilters();
+    }, 250));
 });
 
 // Выпадающие фильтры-сортировки по датам в шапке таблицы
@@ -1629,7 +1660,7 @@ $all('.col-sort').forEach(sel => {
         const dir = sel.value;
         if (dir) state.columnSorts[col] = dir;
         else delete state.columnSorts[col];
-        renderAllTab();
+        reloadDevicePageFromFilters();
     });
 });
 
@@ -1643,7 +1674,7 @@ if (resetBtn) {
         $all('.col-sort').forEach(sel => {
             sel.value = (sel.dataset.col === 'nextVerification') ? 'asc' : '';
         });
-        renderAllTab();
+        reloadDevicePageFromFilters();
     });
 }
 
