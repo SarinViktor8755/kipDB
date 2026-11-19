@@ -538,7 +538,6 @@ const workflowTabs = {
     ] }
 };
 const workflowSelection = { positions: new Set(), warehouse: new Set(), kip: new Set() };
-const recentlyMovedToWarehouse = new Set();
 const workflowFilters = { positions: {}, warehouse: {}, kip: {} };
 
 function initializeWorkflowTabs() {
@@ -656,14 +655,6 @@ function renderWorkflowTab(key) {
     const query = (host.querySelector('.workflow-search')?.value || '').toLowerCase().trim();
     const filters = workflowFilters[key];
     // Последняя складская партия определяется по сохранённому сервером workflowMovedAt.
-    let latestWarehouseStamp = '';
-    if (key === 'warehouse') {
-        latestWarehouseStamp = state.devices.filter(d => locationStatusOf(d) === 'Склад' && d.workflowMovedAt)
-            .map(d => String(d.workflowMovedAt)).sort().pop() || '';
-        recentlyMovedToWarehouse.clear();
-        if (latestWarehouseStamp) state.devices.filter(d => locationStatusOf(d) === 'Склад' && String(d.workflowMovedAt) === latestWarehouseStamp)
-            .forEach(d => recentlyMovedToWarehouse.add(Number(d.id)));
-    }
     let rows = state.devices.filter(device => {
         if (locationStatusOf(device) !== config.status) return false;
         if (query && ![device.name,device.location,device.serialNumber,device.sensorType,device.unit,device.category,device.groupName,device.positionName,device.redLine].join(' ').toLowerCase().includes(query)) return false;
@@ -697,7 +688,7 @@ function renderWorkflowTab(key) {
         const ref = referencePositionForDevice(d);
         const equipment = ref ? ref.equipment : d.groupName;
         const positionName = ref ? ref.description : (d.positionName || d.name);
-        return `<tr data-id="${d.id}" class="${key === 'warehouse' && recentlyMovedToWarehouse.has(Number(d.id)) ? 'workflow-recently-moved' : ''}">
+        return `<tr data-id="${d.id}">
         <td class="workflow-select-cell"><input type="checkbox" class="workflow-device-check" data-id="${d.id}" aria-label="Выбрать прибор" ${workflowSelection[key].has(Number(d.id)) ? 'checked' : ''}></td>
         <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td>${key === 'warehouse' ? `<td class="warehouse-date-column">${escapeHtml(formatWorkflowTimestamp(d.workflowMovedAt))}</td>` : ''}<td>${escapeHtml(formatScale(d))}</td>
@@ -826,7 +817,6 @@ async function moveSelectedDevices(fromTab, action) {
         if (moved && destinationTab) {
             clearWorkflowTabSelection(destinationTab);
             successful.forEach(item => workflowSelection[destinationTab].add(Number(item.id)));
-            if (destinationTab === 'warehouse') successful.forEach(item => recentlyMovedToWarehouse.add(Number(item.id)));
             render();
             window.location.hash = destinationTab;
             switchTab(destinationTab);
