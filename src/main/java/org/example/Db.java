@@ -495,9 +495,9 @@ public class Db {
         List<String> values = new ArrayList<>();
         if (query != null && !query.isBlank()) {
             where.append(" AND (lower(coalesce(serial_number,'')) LIKE ? OR lower(coalesce(name,'')) LIKE ? OR lower(coalesce(location,'')) LIKE ?")
-                 .append(" OR lower(json_extract(details_json,'$.sensorType')) LIKE ? OR lower(json_extract(details_json,'$.groupName')) LIKE ? OR lower(json_extract(details_json,'$.positionName')) LIKE ?) ");
+                 .append(" OR lower(json_extract(details_json,'$.sensorType')) LIKE ? OR lower(json_extract(details_json,'$.unit')) LIKE ? OR lower(json_extract(details_json,'$.category')) LIKE ? OR lower(json_extract(details_json,'$.groupName')) LIKE ? OR lower(json_extract(details_json,'$.positionName')) LIKE ? OR lower(json_extract(details_json,'$.redLine')) LIKE ?) ");
             String like = "%" + query.trim().toLowerCase() + "%";
-            for (int i=0;i<6;i++) values.add(like);
+            for (int i=0;i<9;i++) values.add(like);
         }
         if ("overdue".equals(status)) where.append(" AND next_verification IS NOT NULL AND next_verification < date('now','localtime') ");
         else if ("soon".equals(status)) where.append(" AND next_verification >= date('now','localtime') AND next_verification <= date('now','localtime','+30 day') ");
@@ -514,6 +514,8 @@ public class Db {
         columns.put("accuracyClass","json_extract(details_json,'$.accuracyClass')");
         columns.put("redLine","json_extract(details_json,'$.redLine')");
         columns.put("deferredVerification","json_extract(details_json,'$.deferredVerification')");
+        columns.put("locationStatus","CASE json_extract(details_json,'$.workflowStatus') WHEN 'KIP' THEN 'КИП' WHEN 'WAREHOUSE' THEN 'Склад' WHEN 'WRITTEN_OFF' THEN 'Списан' WHEN 'INSTALLED' THEN 'На позиции' ELSE CASE WHEN coalesce(location,'') <> '' THEN 'На позиции' ELSE 'Склад' END END");
+        columns.put("scale","coalesce(json_extract(details_json,'$.scaleMin'),'') || ' ' || coalesce(json_extract(details_json,'$.scaleMax'),'') || ' ' || coalesce(json_extract(details_json,'$.unit'),'')");
         columns.put("lastVerification","last_verification");
         columns.put("nextVerification","next_verification");
         for (String key : filters.keySet()) {
