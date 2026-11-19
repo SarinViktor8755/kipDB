@@ -129,6 +129,16 @@ public class ApiHandler implements HttpHandler {
                 sendJson(ex, 403, new JSONObject().put("error", "Гость может только просматривать данные")); return;
             }
 
+            // Отдельный список приборов для вкладки «График».
+            if (path.equals("/api/chart")) { if (!"GET".equals(method)) { methodNotAllowed(ex); return; } sendJson(ex,200,ChartDb.list()); return; }
+            if (path.equals("/api/chart/search")) {
+                if (!"GET".equals(method)) { methodNotAllowed(ex); return; }
+                String q="", query=ex.getRequestURI().getRawQuery();
+                if(query!=null) for(String part:query.split("&")){int eq=part.indexOf('=');if(eq>=0&&"q".equals(part.substring(0,eq)))q=URLDecoder.decode(part.substring(eq+1),StandardCharsets.UTF_8);}
+                sendJson(ex,200,ChartDb.search(q)); return;
+            }
+            if (path.equals("/api/chart/order")) { if (!"PUT".equals(method)) { methodNotAllowed(ex); return; } JSONArray ids=readJson(ex).optJSONArray("ids"); if(ids==null){sendJson(ex,400,new JSONObject().put("error","Не передан порядок приборов"));return;} ChartDb.reorder(ids);sendJson(ex,200,new JSONObject().put("status","ok"));return; }
+            if (path.matches("/api/chart/[0-9]+")) { long id=Long.parseLong(path.substring("/api/chart/".length())); if("POST".equals(method)){ChartDb.add(id);sendJson(ex,201,new JSONObject().put("added",true));}else if("DELETE".equals(method))sendJson(ex,200,new JSONObject().put("removed",ChartDb.remove(id)));else methodNotAllowed(ex);return; }
             // Справочник позиций из Книга1 хранится в таблице основной базы kip.db.
             if (path.equals("/api/reference-positions")) {
                 if ("GET".equals(method)) sendJson(ex, 200, PositionDirectory.list());
