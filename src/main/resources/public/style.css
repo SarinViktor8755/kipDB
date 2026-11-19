@@ -1034,3 +1034,5 @@ body.read-only #copyDeviceBtn { display: none !important; }
     box-shadow: none !important;
 }
 .workflow-recently-moved td:first-child { border-left: 0; }
+
+.chart-toolbar input{flex:1;min-width:260px}.chart-search-results{margin:0 0 14px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--bg-2)}.chart-search-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 14px;border-bottom:1px solid var(--border)}.chart-search-row strong,.chart-search-row span{display:block}.chart-search-row span{color:var(--text-dim);font-size:12px;margin-top:3px}.chart-order{white-space:nowrap}
