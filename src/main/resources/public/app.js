@@ -507,14 +507,16 @@ function renderAllTab() {
     $('#tableAll tbody').innerHTML = rows.map(d => {
         const ref = referencePositionForDevice(d);
         return `<tr data-id="${d.id}">
-        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td><td>${escapeHtml(d.location || '—')}</td>
+        <td>${d.serialNumber ? `<button type="button" class="btn-link serial-device-link" data-open-workflow-device="${escapeHtml(d.id)}">${escapeHtml(d.serialNumber)}</button>` : '—'}</td>
         <td>${escapeHtml(d.sensorType || '—')}</td>
+        <td>${escapeHtml(ref ? (ref.equipment || '—') : (d.groupName || '—'))}</td>
+        <td>${escapeHtml(ref ? (ref.description || '—') : (d.positionName || '—'))}</td>
+        <td>${escapeHtml(d.location || '—')}</td>
         <td>${escapeHtml(formatScale(d))}</td>
         <td>${escapeHtml(d.category || '—')}</td><td>${formatTableDate(d.lastVerification)}</td>
         <td>${escapeHtml(d.mpi || '—')}</td><td>${formatTableDate(d.nextVerification)}</td>
         <td>${escapeHtml(d.accuracyClass || '—')}</td><td>${escapeHtml(d.redLine || '—')}</td>
         <td>${escapeHtml(d.deferredVerification || '—')}</td>
-        <td>${escapeHtml(ref ? (ref.equipment || '—') : (d.groupName || '—'))}</td><td>${escapeHtml(ref ? (ref.description || '—') : (d.positionName || '—'))}</td>
         <td><span class="location-status ${locationStatusClassOf(d)}">${escapeHtml(locationStatusOf(d))}</span></td>
     </tr>`;
     }).join('');
@@ -1121,6 +1123,7 @@ function switchTab(tabName) {
     if (tabName === 'movements') loadMovements(false).catch(e => showToast('Ошибка загрузки перемещений', e.message, 'error'));
     if (tabName === 'trash') renderTrashTab();
     if (tabName === 'position-directory') renderReferencePositions();
+    if (tabName === 'chart') loadChart().catch(e => showToast('Ошибка загрузки графика', e.message, 'error'));
     if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
     if (tabName === 'documents') {
         state.currentDocument = null;
@@ -1568,6 +1571,16 @@ $('#tableDocumentDevices').addEventListener('click', async e => {
     if (!r.ok) { showToast('Ошибка', 'HTTP ' + r.status, 'error'); return; }
     state.currentDocument = await r.json(); renderDocumentWorkspace(); await loadDocuments();
 });
+
+/* График: отдельный список ссылок на приборы с сохранением порядка. */
+let chartRows = []; let chartSearchTimer = null;
+async function loadChart(){const r=await apiFetch('/api/chart');if(!r.ok)throw new Error('HTTP '+r.status);chartRows=await r.json();renderChart();}
+function renderChart(){const body=$('#tableChart tbody');if(!body)return;body.innerHTML=chartRows.map((d,i)=>`<tr><td>${i+1}</td><td><button class="btn-link" data-chart-open="${d.id}">${escapeHtml(d.serialNumber||'—')}</button></td><td>${escapeHtml(d.sensorType||'—')}</td><td>${escapeHtml(d.groupName||'—')}</td><td>${escapeHtml(d.positionName||'—')}</td><td>${escapeHtml(d.location||'—')}</td><td>${escapeHtml(d.addedAt||'—')}</td><td class="chart-order"><button class="btn" data-chart-up="${d.id}" ${i===0?'disabled':''}>↑</button> <button class="btn" data-chart-down="${d.id}" ${i===chartRows.length-1?'disabled':''}>↓</button></td><td><button class="btn-danger" data-chart-remove="${d.id}">Убрать</button></td></tr>`).join('');$('#chartCount').textContent=chartRows.length+' приборов';$('#emptyChart').hidden=chartRows.length>0;}
+async function searchChartDevices(){const q=$('#chartSearch').value.trim(),box=$('#chartSearchResults');if(!q){box.hidden=true;box.innerHTML='';return;}const r=await apiFetch('/api/chart/search?q='+encodeURIComponent(q));if(!r.ok)throw new Error('Ошибка поиска');const rows=await r.json();box.innerHTML=rows.map(d=>`<div class="chart-search-row"><div><strong>${escapeHtml(d.serialNumber||'Без номера')}</strong><span>${escapeHtml(d.sensorType||'—')} · ${escapeHtml(d.positionName||d.location||'Без позиции')}</span></div><button class="${d.inChart?'btn':'btn-primary'}" data-chart-add="${d.id}" ${d.inChart?'disabled':''}>${d.inChart?'Уже в графике':'Добавить'}</button></div>`).join('')||'<div class="empty">Приборы не найдены</div>';box.hidden=false;}
+$('#chartSearch')?.addEventListener('input',()=>{clearTimeout(chartSearchTimer);chartSearchTimer=setTimeout(()=>searchChartDevices().catch(e=>showToast('Ошибка поиска',e.message,'error')),220);});
+$('#chartRefreshBtn')?.addEventListener('click',()=>loadChart().catch(e=>showToast('Ошибка графика',e.message,'error')));
+$('#chartSearchResults')?.addEventListener('click',async e=>{const b=e.target.closest('[data-chart-add]');if(!b)return;b.disabled=true;try{const r=await apiFetch('/api/chart/'+b.dataset.chartAdd,{method:'POST'});if(!r.ok)throw new Error('Не удалось добавить прибор');await loadChart();await searchChartDevices();}catch(err){b.disabled=false;showToast('Ошибка добавления',err.message,'error');}});
+$('#tableChart')?.addEventListener('click',async e=>{const open=e.target.closest('[data-chart-open]');if(open){const d=state.devices.find(x=>Number(x.id)===Number(open.dataset.chartOpen));if(d)openViewModal(d);return;}const rm=e.target.closest('[data-chart-remove]');if(rm){const r=await apiFetch('/api/chart/'+rm.dataset.chartRemove,{method:'DELETE'});if(!r.ok){showToast('Ошибка','Не удалось убрать прибор','error');return;}await loadChart();return;}const move=e.target.closest('[data-chart-up],[data-chart-down]');if(move){const id=Number(move.dataset.chartUp||move.dataset.chartDown),i=chartRows.findIndex(x=>Number(x.id)===id),j=i+(move.hasAttribute('data-chart-up')?-1:1);if(i<0||j<0||j>=chartRows.length)return;[chartRows[i],chartRows[j]]=[chartRows[j],chartRows[i]];const r=await apiFetch('/api/chart/order',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:chartRows.map(x=>x.id)})});if(!r.ok){await loadChart();showToast('Ошибка','Не удалось сохранить порядок','error');return;}renderChart();}});
 
 /* =========================================================
  *  ОБРАБОТЧИКИ "ВСЕ ПРИБОРЫ"
