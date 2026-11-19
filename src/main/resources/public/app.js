@@ -1112,7 +1112,7 @@ function switchTab(tabName) {
     if (panel) panel.classList.add('active');
 
     state.currentTab = tabName;
-    const titles = {"all":"Все приборы","positions":"На позиции","warehouse":"Склад","kip":"КИП","documents":"Документы","movements":"Перемещения","audit":"Журнал","trash":"Корзина","position-directory":"Справочник позиций","chart":"График","users":"Пользователи","help":"Инструкция"};
+    const titles = {"all":"Все приборы","positions":"На позиции","warehouse":"Склад","kip":"КИП","movements":"Перемещения","audit":"Журнал","trash":"Корзина","position-directory":"Справочник позиций","chart":"График","users":"Пользователи","help":"Инструкция"};
     const pageTitle = $('#pageTitle');
     if (pageTitle) pageTitle.textContent = titles[tabName] || 'Приборы КИП';
 
@@ -1125,12 +1125,6 @@ function switchTab(tabName) {
     if (tabName === 'position-directory') renderReferencePositions();
     if (tabName === 'chart') loadChart().catch(e => showToast('Ошибка загрузки графика', e.message, 'error'));
     if (tabName === 'users') loadUsers().catch(e => showToast('Ошибка пользователей', e.message, 'error'));
-    if (tabName === 'documents') {
-        state.currentDocument = null;
-        $('#documentWorkspace').hidden = true;
-        $('#documentsListView').hidden = false;
-        loadDocuments().catch(e => showToast('Ошибка загрузки документов', e.message, 'error'));
-    }
 }
 
 async function handleAppRoute() {
@@ -1145,7 +1139,7 @@ async function handleAppRoute() {
         return;
     }
 
-    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'documents', 'movements', 'audit', 'trash', 'position-directory', 'chart', 'help', 'users'];
+    const allowedTabs = ['all', 'positions', 'warehouse', 'kip', 'movements', 'audit', 'trash', 'position-directory', 'chart', 'help', 'users'];
     switchTab(allowedTabs.includes(hash) ? hash : 'all');
 }
 
