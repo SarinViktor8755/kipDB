@@ -967,11 +967,8 @@ body.read-only #copyDeviceBtn { display: none !important; }
 .user-chevron { width:15px; height:15px; color:var(--text-dim); transition:transform .15s ease; }
 .user-menu[open] .user-chevron { transform:rotate(180deg); }
 .current-user { color:var(--text); font-weight:600; white-space:nowrap; }
-.user-menu-panel { position:absolute; z-index:1000; top:calc(100% + 8px); right:0; min-width:235px; display:flex; flex-direction:column; gap:10px; padding:14px; background:var(--bg-2); border:1px solid var(--border); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,.32); }
-.user-menu-panel .user-select-label { color:var(--text-dim); font-size:12px; }
+.user-menu-panel { position:absolute; z-index:1000; top:calc(100% + 8px); right:0; min-width:235px; display:flex; flex-direction:column; padding:10px; background:var(--bg-2); border:1px solid var(--border); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,.32); }
 .user-menu-panel select { width:100%; max-width:none; padding:8px 10px; border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); }
-.user-menu-panel #logoutBtn { align-self:stretch; text-align:left; padding:8px 2px; color:#fca5a5; }
-.user-menu-panel #logoutBtn:hover { color:#fecaca; }
 .tabs .tab { display:inline-flex; align-items:center; gap:7px; }
 .tab-icon { width:17px; height:17px; flex:0 0 17px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
 .tabs .tab[data-tab="positions"],.tabs .tab[data-tab="warehouse"],.tabs .tab[data-tab="kip"] { color:var(--text-dim); background:transparent; border-color:transparent; }
