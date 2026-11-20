@@ -519,7 +519,7 @@ async function loadTrash() {
 }
 
 function updateWorkflowTabBadges() {
-    const counts = { positions: Number(state.stats.positions || 0), warehouse: Number(state.stats.warehouse || 0) };
+    const counts = { positions: Number(state.stats.positions || 0), warehouse: Number(state.stats.warehouse || 0), kip: Number(state.stats.kip || 0) };
     for (const [key, count] of Object.entries(counts)) {
         const badge = document.querySelector('.tab[data-tab="' + key + '"] .tab-count-badge');
         if (!badge) continue;
@@ -1266,8 +1266,6 @@ function applyRoleUI() {
     $all('.admin-only').forEach(el => { el.hidden = !isAdmin; });
     const cur = $('#currentUser');
     if (cur) cur.textContent = state.user ? `${state.user.name} · ${roleTitle(state.user.role)}` : 'Не выполнен вход';
-    const logout = $('#logoutBtn');
-    if (logout) logout.hidden = !state.user;
     const userMenu = $('#userMenu');
     if (userMenu && !state.user) userMenu.removeAttribute('open');
     if (state.user) $('#userSelect').value = state.user.login;
@@ -1367,16 +1365,6 @@ $('#passwordForm').addEventListener('submit', async e => {
 $('#cancelLoginBtn').addEventListener('click', () => {
     $('#passwordModal').hidden = true; $('#loginPassword').value = ''; $('#userSelect').value = state.user ? state.user.login : '';
 });
-$('#logoutBtn').addEventListener('click', async () => {
-    $('#userMenu')?.removeAttribute('open');
-    await apiFetch('/api/auth/logout', {method:'POST'});
-    state.user = null;
-    $('#userSelect').value = 'guest';
-    await loginSelectedUser('');
-    if (state.currentTab === 'users') { window.location.hash = 'all'; }
-    showToast('Выполнен выход', 'Открыт режим гостя', 'info');
-});
-
 async function loadUsers() {
     if (!state.user) return;
     const wrap = document.getElementById('usersTableWrap');
