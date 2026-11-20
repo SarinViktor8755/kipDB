@@ -599,7 +599,7 @@ public class ApiHandler implements HttpHandler {
         List<Device> all = Db.getAllDevices();
         LocalDate today = LocalDate.now();
         LocalDate in30 = today.plusDays(30);
-        int overdue = 0, soon = 0, ok = 0, positions = 0, warehouse = 0;
+        int overdue = 0, soon = 0, ok = 0, positions = 0, warehouse = 0, kip = 0;
         for (Device d : all) {
             if (d.nextVerification != null && !d.nextVerification.isEmpty()) {
                 LocalDate nv = LocalDate.parse(d.nextVerification);
@@ -613,6 +613,7 @@ public class ApiHandler implements HttpHandler {
             String workflow = details.optString("workflowStatus", "");
             if ("INSTALLED".equals(workflow) || (!"WRITTEN_OFF".equals(workflow) && !"WAREHOUSE".equals(workflow) && !"KIP".equals(workflow) && d.location != null && !d.location.isBlank())) positions++;
             else if ("WAREHOUSE".equals(workflow) || (workflow.isBlank() && (d.location == null || d.location.isBlank()))) warehouse++;
+            else if ("KIP".equals(workflow)) kip++;
         }
         sendJson(ex, 200, new JSONObject()
                 .put("total", all.size())
@@ -620,7 +621,8 @@ public class ApiHandler implements HttpHandler {
                 .put("soon", soon)
                 .put("ok", ok)
                 .put("positions", positions)
-                .put("warehouse", warehouse));
+                .put("warehouse", warehouse)
+                .put("kip", kip));
     }
 
     private void exportDevicesCsv(HttpExchange ex) throws IOException, SQLException {
